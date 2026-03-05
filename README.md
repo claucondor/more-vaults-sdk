@@ -55,6 +55,23 @@ When `oraclesCrossChainAccounting = true`, the vault has a configured oracle fee
 
 When it's `false`, the vault must query the spokes via **LayerZero Read** to get accurate accounting. This takes 1–5 minutes for a round-trip. Deposits and redeems are **async** — the user locks funds, waits for the oracle response, and a keeper finalizes.
 
+### Hub liquidity and repatriation
+
+In a cross-chain vault, the hub typically holds only a **small fraction of TVL as liquid assets**. The rest is deployed to spoke chains where it earns yield — locked in positions on Morpho, Aave, or other protocols.
+
+This means:
+
+- **`totalAssets()`** = hub liquid balance + value of all spoke positions (reported by oracle or LZ Read).
+- **Redeemable now** = hub liquid balance only. If a user tries to redeem more than the hub holds, the call fails.
+- For async redeems (R5), a failed `executeRequest` causes the vault to **auto-refund shares** back to the user — no assets are lost, but the redeem did not complete.
+
+**Repatriation** is the process of moving funds from spokes back to the hub so they become liquid again. This is a **manual, curator-only operation** (`executeBridging`). There is no automatic mechanism — the protocol does not pull funds from spokes on behalf of users.
+
+If a redeem fails because the hub is under-funded:
+1. The user's shares are returned automatically (or the tx reverts before any state change for R1).
+2. The vault curator must repatriate liquidity from the spokes.
+3. The user retries the redeem once sufficient liquidity is available on the hub.
+
 ### Withdrawal queue and timelock
 
 Some vaults require shares to be "queued" before redemption:

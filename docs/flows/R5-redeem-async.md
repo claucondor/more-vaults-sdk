@@ -203,6 +203,20 @@ const { guid } = await redeemAsync(
 )
 ```
 
+## When the redeem fails — auto-refund
+
+After the LZ Read response arrives, the keeper calls `executeRequest`, which internally calls `vault.redeem(shares, receiver, owner)`. If the hub does not hold enough liquid assets to cover the redemption, this call reverts and the vault automatically **refunds the shares** back to the user. No assets are lost, but the redeem did not complete.
+
+**Why would the hub be short?** Cross-chain vaults deploy most of their TVL to spoke chains where the yield is generated (Morpho, Aave, etc.). The hub typically holds only a small liquidity buffer. If more users redeem than the buffer can cover, the hub runs dry.
+
+**What to do if a redeem is refunded:**
+1. Check `getAsyncRequestStatus(publicClient, vault, guid)` — `status = 'refunded'` confirms this.
+2. The user's shares are back in their wallet — nothing is lost.
+3. Contact the vault curator to repatriate liquidity from the spokes (`executeBridging`). This is a manual, curator-only operation.
+4. Retry the redeem once the hub has sufficient liquid assets.
+
+> Note: the withdrawal queue + timelock (R3/R4) does **not** prevent this failure — it only gates when a redeem can be submitted, not whether the hub has liquidity. The root cause is always insufficient hub-side balance at execution time.
+
 ## Errors
 
 | Error | Cause | Fix |
@@ -211,6 +225,7 @@ const { guid } = await redeemAsync(
 | `Escrow not configured` | `getEscrow() = address(0)` | Admin must set escrow in MoreVaultsRegistry |
 | `Vault is not a hub` | `isHub = false` | Use `redeemShares` instead |
 | `Oracle accounting enabled` | Oracle is ON | Use `redeemShares` instead |
+| Request refunded | Hub had insufficient liquid assets at execution time | Wait for curator to repatriate from spokes, then retry |
 
 ## See also
 
