@@ -2,76 +2,204 @@
 
 TypeScript SDK for the MoreVaults protocol. Supports **viem/wagmi** and **ethers.js v6**.
 
-## Install
+---
 
-```bash
-npm install
+## What is MoreVaults
+
+MoreVaults is a cross-chain yield vault protocol. Users deposit tokens and receive **shares** that represent their proportional stake. The vault deploys those funds across multiple chains to earn yield. When a user redeems their shares, they get back the underlying tokens plus any accrued yield.
+
+Each vault is a **diamond proxy** (EIP-2535) — a single address that routes calls to multiple facets. From the SDK's perspective, it's just an address.
+
+---
+
+## Core concepts
+
+### Assets and shares
+
+- **Asset** (or underlying): the token users deposit — e.g. USDC. Always the same token in and out.
+- **Shares**: what the vault mints when you deposit. They represent your ownership percentage. As the vault earns yield, each share becomes worth more assets. Shares are ERC-20 tokens — they live at the vault address itself.
+- **Share price**: how many assets one share is worth right now. Starts at 1:1 and grows over time.
+
+```
+Deposit 100 USDC  →  receive 100 shares  (at launch, price = 1)
+Wait 1 year       →  share price = 1.05
+Redeem 100 shares →  receive 105 USDC
 ```
 
-## Clients: publicClient vs walletClient
+> Vault shares use more decimals than the underlying token. A vault over USDC (6 decimals) will typically have 8 decimals for shares. Always read `vault.decimals()` — never hardcode it.
 
-Every SDK function takes one or two "clients" as its first arguments. These are the objects that talk to the blockchain.
+### Hub and spoke
 
-**viem** splits this into two separate objects:
+MoreVaults uses a **hub-and-spoke** model for cross-chain yield:
 
-| Client | What it does | How to create it |
-|--------|-------------|-----------------|
-| `publicClient` | Read-only. Calls `eth_call`, reads balances, simulates transactions. No wallet needed. | `createPublicClient({ chain, transport: http(RPC_URL) })` |
-| `walletClient` | Signs and sends transactions. Needs a connected account (MetaMask, private key, etc). | `createWalletClient({ account, chain, transport: http(RPC_URL) })` |
+- **Hub** (`isHub = true`): the main vault on **Flow EVM**. Holds accounting, mints/burns shares, accepts deposits and redemptions. All SDK flows target the hub.
+- **Spoke**: a position on another chain (Arbitrum, Base, etc.) where the vault has deployed funds for yield. Users on spoke chains bridge tokens to the hub via LayerZero OFT — they never interact with the spoke contracts directly.
 
-In a React/wagmi app you get both from hooks:
+If a vault has `isHub = false`, it is a single-chain vault — no cross-chain flows apply, use D1/R1.
+
+### Vault modes
+
+A vault is always in one of these modes. Use `getVaultStatus()` to read it:
+
+| Mode | `isHub` | Oracle | What it means | Which flows |
+|------|---------|--------|---------------|-------------|
+| `local` | false | — | Single-chain vault. No cross-chain. | D1, D2, R1, R2 |
+| `cross-chain-oracle` | true | ON | Hub with cross-chain positions. Oracle feeds aggregate spoke balances synchronously. From the user's perspective, identical to local. | D1/D3, D2, R1, R2 |
+| `cross-chain-async` | true | OFF | Hub where spoke balances are NOT available synchronously. Every deposit/redeem triggers a LayerZero Read to query spokes before the vault can calculate share prices. Slower, requires a keeper. | D4, D5, R5 |
+| `paused` | — | — | No deposits or redeems accepted. | None |
+| `full` | — | — | Deposit capacity reached. Redeems still work. | R1, R2 only |
+
+### Oracle ON vs OFF
+
+When `oraclesCrossChainAccounting = true`, the vault has a configured oracle feed that knows the current value of funds deployed to spoke chains. `totalAssets()` resolves instantly in the same block — flows are synchronous (D1/R1).
+
+When it's `false`, the vault must query the spokes via **LayerZero Read** to get accurate accounting. This takes 1–5 minutes for a round-trip. Deposits and redeems are **async** — the user locks funds, waits for the oracle response, and a keeper finalizes.
+
+### Withdrawal queue and timelock
+
+Some vaults require shares to be "queued" before redemption:
+
+- **`withdrawalQueueEnabled = true`**: users must call `requestRedeem` first, then `redeemShares` separately.
+- **`withdrawalTimelockSeconds > 0`**: there is a mandatory waiting period between `requestRedeem` and `redeemShares`. Useful for vaults that need time to rebalance liquidity.
+
+If neither is set, `redeemShares` works in a single call.
+
+### Escrow
+
+The `MoreVaultsEscrow` is a contract that temporarily holds user funds during async flows (D4, D5, R5). When a user calls `depositAsync`, their tokens go to the escrow — not the vault — while the LayerZero Read resolves. After the keeper finalizes, the escrow releases the funds to the vault.
+
+**You never interact with the escrow directly.** The SDK handles the approve-to-escrow step internally. You just need to pass its address in `VaultAddresses.escrow`.
+
+To get the escrow address: read it from the vault itself:
+```ts
+const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
+const escrow = status.escrow // address(0) if not configured
+```
+
+### VaultAddresses
+
+Every flow function takes a `VaultAddresses` object:
+
+```ts
+interface VaultAddresses {
+  vault: Address    // Hub vault (diamond proxy) — required for all flows
+  escrow: Address   // MoreVaultsEscrow — required for D4, D5, R5
+  shareOFT?: Address  // OFTAdapter for vault shares — required for R6 (spoke redeem)
+  usdcOFT?: Address   // OFT for underlying token on spoke — required for D6/D7
+}
+```
+
+For simple hub flows (D1, R1) you only need `vault`. For async flows you also need `escrow`. For cross-chain flows from a spoke you also need the OFT addresses — these are specific to each spoke chain and are set up when the protocol deploys to that chain.
+
+### LayerZero EID
+
+LayerZero identifies chains by an **Endpoint ID (EID)** — different from the chain's actual chain ID. You need the EID when calling cross-chain flows (D6/D7, R6):
+
+| Chain | Chain ID | LayerZero EID |
+|-------|----------|---------------|
+| Flow EVM | 747 | 30332 |
+| Arbitrum | 42161 | 30110 |
+| Base | 8453 | 30184 |
+| Ethereum | 1 | 30101 |
+
+### GUID (async request ID)
+
+When you call `depositAsync`, `mintAsync`, or `redeemAsync`, the function returns a `guid` — a `bytes32` identifier for that specific cross-chain request. Use it to track status:
+
+```ts
+const { guid } = await depositAsync(...)
+
+// Poll status
+const info = await getAsyncRequestStatusLabel(publicClient, vault, guid)
+// info.status: 'pending' | 'ready-to-execute' | 'completed' | 'refunded'
+// info.result: shares minted or assets received once completed
+```
+
+---
+
+## Clients
+
+Every SDK function takes one or two "clients" as its first arguments — the objects that talk to the blockchain.
+
+**viem** uses two separate objects:
+
+| Client | Role | How to create |
+|--------|------|--------------|
+| `publicClient` | Read-only — calls `eth_call`, reads state, simulates txs. No wallet needed. | `createPublicClient({ chain, transport: http(RPC_URL) })` |
+| `walletClient` | Signs and sends transactions. Needs a connected account. | `createWalletClient({ account, chain, transport: http(RPC_URL) })` |
+
+In React with wagmi:
 ```ts
 import { usePublicClient, useWalletClient } from 'wagmi'
 const publicClient = usePublicClient()
 const { data: walletClient } = useWalletClient()
 ```
 
-**ethers.js** uses a single `Signer` object that can both read and sign. The SDK's ethers version always takes a `Signer` (never a bare `Provider`):
+**ethers.js** uses a single `Signer` for both reading and signing:
 
-| Object | What it does | How to get it |
-|--------|-------------|---------------|
-| `Signer` (browser) | Connected MetaMask or other wallet | `new BrowserProvider(window.ethereum).getSigner()` |
-| `Signer` (Node.js) | Private key wallet for scripts/bots | `new Wallet(PRIVATE_KEY, new JsonRpcProvider(RPC_URL))` |
+| How to get it | When to use |
+|---------------|-------------|
+| `new BrowserProvider(window.ethereum).getSigner()` | Browser — MetaMask or any injected wallet |
+| `new Wallet(PRIVATE_KEY, new JsonRpcProvider(RPC_URL))` | Node.js — scripts, bots, backends |
 
-Read-only helpers (`getUserPosition`, `previewDeposit`, etc.) take a `Provider` in the ethers version — you can pass the provider directly without needing a wallet.
+Read-only helpers (`getUserPosition`, `previewDeposit`, etc.) accept a bare `Provider` in the ethers version — no signer needed.
 
-> In all flow docs, `publicClient` = read-only viem client, `walletClient` = signing viem client, `signer` = ethers Signer. The chain they point to must match the chain where the vault lives (Flow EVM for hub flows, spoke chain for D6/D7/R6).
+> The client's chain must match the chain where the vault lives. Hub flows → Flow EVM. Spoke deposit/redeem (D6/D7/R6) → the spoke chain.
+
+---
 
 ## Quick start
 
 ### viem / wagmi
 
 ```ts
-import { depositSimple, redeemShares, getUserPosition, getVaultStatus } from './src/viem/index.js'
+import { getVaultStatus, depositSimple, getUserPosition } from './src/viem/index.js'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 
 const publicClient = createPublicClient({ chain: flowEvm, transport: http(RPC_URL) })
 const walletClient = createWalletClient({ account, chain: flowEvm, transport: http(RPC_URL) })
 
-const addresses = { vault: '0x...', escrow: '0x...' }
-
-// Check which flow to use
-const status = await getVaultStatus(publicClient, addresses.vault)
+// 1. Check vault status to know which flow to use
+const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
+// status.mode → 'local' | 'cross-chain-oracle' | 'cross-chain-async' | 'paused' | 'full'
 // status.recommendedDepositFlow → 'depositSimple' | 'depositAsync' | 'none'
+// status.escrow → escrow address (needed for async flows)
 
-// Deposit
-const { txHash, shares } = await depositSimple(walletClient, publicClient, addresses, parseUnits('100', 6), account.address)
+const addresses = { vault: VAULT_ADDRESS, escrow: status.escrow }
 
-// Read user position
-const position = await getUserPosition(publicClient, addresses.vault, account.address)
+// 2. Deposit
+const { txHash, shares } = await depositSimple(
+  walletClient, publicClient, addresses,
+  parseUnits('100', 6), // 100 USDC
+  account.address,
+)
+
+// 3. Read position
+const position = await getUserPosition(publicClient, VAULT_ADDRESS, account.address)
+console.log('Shares:', position.shares)
+console.log('Value:', position.estimatedAssets)
 ```
 
 ### ethers.js
 
 ```ts
-import { depositSimple, getUserPosition } from './src/ethers/index.js'
-import { BrowserProvider } from 'ethers'  // or JsonRpcProvider for Node.js
+import { getVaultStatus, depositSimple, getUserPosition } from './src/ethers/index.js'
+import { BrowserProvider, parseUnits } from 'ethers'
 
 const provider = new BrowserProvider(window.ethereum)
 const signer = await provider.getSigner()
 
-const { txHash, shares } = await depositSimple(signer, { vault: '0x...', escrow: '0x...' }, parseUnits('100', 6), signer.address)
+const status = await getVaultStatus(provider, VAULT_ADDRESS)
+const addresses = { vault: VAULT_ADDRESS, escrow: status.escrow }
+
+const { txHash, shares } = await depositSimple(
+  signer, addresses,
+  parseUnits('100', 6),
+  await signer.getAddress(),
+)
 ```
+
+---
 
 ## Flows
 
@@ -79,38 +207,40 @@ const { txHash, shares } = await depositSimple(signer, { vault: '0x...', escrow:
 
 | ID | Function | When to use | Doc |
 |----|----------|-------------|-----|
-| D1 | `depositSimple` | User on hub (Flow EVM), oracle ON or local vault | [D1](./docs/flows/D1-deposit-simple.md) |
-| D2 | `depositMultiAsset` | Deposit multiple tokens in one call | [D2](./docs/flows/D2-deposit-multi-asset.md) |
-| D3 | `depositCrossChainOracleOn` | Alias for D1 — hub with oracle ON, hub chain only | [D3](./docs/flows/D3-deposit-oracle-on.md) |
-| D4 | `depositAsync` | Hub with oracle OFF — async LZ Read flow | [D4](./docs/flows/D4-deposit-async.md) |
-| D5 | `mintAsync` | Same as D4 but specify exact shares | [D5](./docs/flows/D5-mint-async.md) |
-| D6/D7 | `depositFromSpoke` | User on another chain — bridge via LZ OFT | [D6/D7](./docs/flows/D6-D7-deposit-from-spoke.md) |
+| D1 | `depositSimple` | User on hub (Flow EVM), oracle ON or local vault | [→](./docs/flows/D1-deposit-simple.md) |
+| D2 | `depositMultiAsset` | Deposit multiple tokens in one call | [→](./docs/flows/D2-deposit-multi-asset.md) |
+| D3 | `depositCrossChainOracleOn` | Alias for D1 — hub with oracle ON, explicit naming | [→](./docs/flows/D3-deposit-oracle-on.md) |
+| D4 | `depositAsync` | Hub with oracle OFF — async LZ Read, shares arrive in ~1–5 min | [→](./docs/flows/D4-deposit-async.md) |
+| D5 | `mintAsync` | Same as D4 but user specifies exact share amount | [→](./docs/flows/D5-mint-async.md) |
+| D6/D7 | `depositFromSpoke` | User on another chain — tokens bridge via LZ OFT | [→](./docs/flows/D6-D7-deposit-from-spoke.md) |
 
 ### Redeem
 
 | ID | Function | When to use | Doc |
 |----|----------|-------------|-----|
-| R1 | `redeemShares` | Standard ERC-4626 redeem, hub chain | [R1](./docs/flows/R1-redeem-shares.md) |
-| R2 | `withdrawAssets` | Specify exact asset amount instead of shares | [R2](./docs/flows/R2-withdraw-assets.md) |
-| R3 | `requestRedeem` | Withdrawal queue, no timelock | [R3/R4](./docs/flows/R3-R4-request-redeem.md) |
-| R4 | `requestRedeem` | Withdrawal queue + timelock | [R3/R4](./docs/flows/R3-R4-request-redeem.md) |
-| R5 | `redeemAsync` | Hub with oracle OFF — async LZ Read flow | [R5](./docs/flows/R5-redeem-async.md) |
-| R6 | `bridgeSharesToHub` | Bridge shares from spoke to hub (step 1 of spoke redeem) | [R6](./docs/flows/R6-bridge-shares-to-hub.md) |
+| R1 | `redeemShares` | Standard redeem, hub chain, no queue | [→](./docs/flows/R1-redeem-shares.md) |
+| R2 | `withdrawAssets` | Specify exact asset amount to receive | [→](./docs/flows/R2-withdraw-assets.md) |
+| R3 | `requestRedeem` | Withdrawal queue enabled, no timelock | [→](./docs/flows/R3-R4-request-redeem.md) |
+| R4 | `requestRedeem` | Withdrawal queue + mandatory wait period | [→](./docs/flows/R3-R4-request-redeem.md) |
+| R5 | `redeemAsync` | Hub with oracle OFF — async LZ Read | [→](./docs/flows/R5-redeem-async.md) |
+| R6 | `bridgeSharesToHub` | User on spoke — step 1: bridge shares to hub | [→](./docs/flows/R6-bridge-shares-to-hub.md) |
 
-### User helpers (read-only)
+### User helpers (read-only, no gas)
 
 Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
 
-| Function | Returns |
-|----------|---------|
-| `getUserPosition` | shares, estimatedAssets, sharePrice, pendingWithdrawal |
+| Function | What it returns |
+|----------|----------------|
+| `getUserPosition` | shares, asset value, share price, pending withdrawal |
 | `previewDeposit` | estimated shares for a given asset amount |
 | `previewRedeem` | estimated assets for a given share amount |
-| `canDeposit` | `{ allowed, reason }` — paused / cap / whitelist check |
-| `getVaultMetadata` | name, symbol, decimals, underlying, TVL, capacity, mode |
-| `getVaultStatus` | full config snapshot + `recommendedDepositFlow` / `recommendedRedeemFlow` |
-| `quoteLzFee` | LZ Read fee for async flows (D4, D5, R5) |
-| `getAsyncRequestStatusLabel` | pending / fulfilled / finalized / refunded |
+| `canDeposit` | `{ allowed, reason }` — paused / cap-full / ok |
+| `getVaultMetadata` | name, symbol, decimals, underlying, TVL, capacity |
+| `getVaultStatus` | full config snapshot + recommended flow + issues list |
+| `quoteLzFee` | native fee required for D4, D5, R5 |
+| `getAsyncRequestStatusLabel` | pending / ready-to-execute / completed / refunded |
+
+---
 
 ## Repo structure
 
@@ -120,17 +250,11 @@ more-vaults-sdk/
 │   ├── viem/     ← viem/wagmi SDK
 │   └── ethers/   ← ethers.js v6 SDK
 ├── docs/
-│   ├── flows/    ← one .md per flow with code examples
+│   ├── flows/    ← one .md per flow with detailed examples
 │   ├── user-helpers.md
 │   └── testing.md
 ├── tests/        ← integration tests (require Foundry + Anvil)
 └── contracts/    ← protocol Solidity source + mocks (for running tests)
 ```
 
-## Integration tests
-
-See [docs/testing.md](./docs/testing.md) for full setup and run instructions.
-
-```bash
-bash tests/run.sh  # runs all 43 tests
-```
+Integration tests: [docs/testing.md](./docs/testing.md) — `bash tests/run.sh` runs all 43 tests.
