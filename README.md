@@ -76,20 +76,26 @@ const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
 const escrow = status.escrow // address(0) if not configured
 ```
 
+### Same address on every chain (CREATE3)
+
+MoreVaults deploys all contracts using **CREATE3**, which means a vault has the **same address on every chain** where it exists. If the hub vault on Flow EVM is `0xABC...`, the corresponding escrow and spoke-side contracts are also at predictable, identical addresses across Arbitrum, Base, etc.
+
+This simplifies the frontend significantly — you don't need a separate address map per chain. One address identifies the vault everywhere.
+
 ### VaultAddresses
 
 Every flow function takes a `VaultAddresses` object:
 
 ```ts
 interface VaultAddresses {
-  vault: Address    // Hub vault (diamond proxy) — required for all flows
-  escrow: Address   // MoreVaultsEscrow — required for D4, D5, R5
+  vault: Address      // Vault address — same on every chain (CREATE3)
+  escrow: Address     // MoreVaultsEscrow — same address as vault on each chain, required for D4, D5, R5
   shareOFT?: Address  // OFTAdapter for vault shares — required for R6 (spoke redeem)
-  usdcOFT?: Address   // OFT for underlying token on spoke — required for D6/D7
+  usdcOFT?: Address   // OFT for the underlying token on the spoke — required for D6/D7
 }
 ```
 
-For simple hub flows (D1, R1) you only need `vault`. For async flows you also need `escrow`. For cross-chain flows from a spoke you also need the OFT addresses — these are specific to each spoke chain and are set up when the protocol deploys to that chain.
+For simple hub flows (D1, R1) you only need `vault`. For async flows you also need `escrow` — get it from `getVaultStatus(publicClient, vault).escrow`. For cross-chain flows from a spoke you also need the OFT addresses for that specific spoke chain.
 
 ### LayerZero EID
 
