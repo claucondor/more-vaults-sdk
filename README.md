@@ -8,6 +8,35 @@ TypeScript SDK for the MoreVaults protocol. Supports **viem/wagmi** and **ethers
 npm install
 ```
 
+## Clients: publicClient vs walletClient
+
+Every SDK function takes one or two "clients" as its first arguments. These are the objects that talk to the blockchain.
+
+**viem** splits this into two separate objects:
+
+| Client | What it does | How to create it |
+|--------|-------------|-----------------|
+| `publicClient` | Read-only. Calls `eth_call`, reads balances, simulates transactions. No wallet needed. | `createPublicClient({ chain, transport: http(RPC_URL) })` |
+| `walletClient` | Signs and sends transactions. Needs a connected account (MetaMask, private key, etc). | `createWalletClient({ account, chain, transport: http(RPC_URL) })` |
+
+In a React/wagmi app you get both from hooks:
+```ts
+import { usePublicClient, useWalletClient } from 'wagmi'
+const publicClient = usePublicClient()
+const { data: walletClient } = useWalletClient()
+```
+
+**ethers.js** uses a single `Signer` object that can both read and sign. The SDK's ethers version always takes a `Signer` (never a bare `Provider`):
+
+| Object | What it does | How to get it |
+|--------|-------------|---------------|
+| `Signer` (browser) | Connected MetaMask or other wallet | `new BrowserProvider(window.ethereum).getSigner()` |
+| `Signer` (Node.js) | Private key wallet for scripts/bots | `new Wallet(PRIVATE_KEY, new JsonRpcProvider(RPC_URL))` |
+
+Read-only helpers (`getUserPosition`, `previewDeposit`, etc.) take a `Provider` in the ethers version — you can pass the provider directly without needing a wallet.
+
+> In all flow docs, `publicClient` = read-only viem client, `walletClient` = signing viem client, `signer` = ethers Signer. The chain they point to must match the chain where the vault lives (Flow EVM for hub flows, spoke chain for D6/D7/R6).
+
 ## Quick start
 
 ### viem / wagmi
