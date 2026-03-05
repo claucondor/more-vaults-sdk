@@ -1,0 +1,192 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {IVaultFacet} from "../../src/interfaces/facets/IVaultFacet.sol";
+import {IConfigurationFacet} from "../../src/interfaces/facets/IConfigurationFacet.sol";
+import {IBridgeFacet} from "../../src/interfaces/facets/IBridgeFacet.sol";
+import {MoreVaultsLib} from "../../src/libraries/MoreVaultsLib.sol";
+import {IMoreVaultsEscrow} from "../../src/interfaces/IMoreVaultsEscrow.sol";
+
+contract MockVaultFacet {
+    address public assetToken;
+    bool public isHubFlag = true;
+    uint32 public localEid;
+    address public adapter;
+    uint256 public lastAccountingFeeQuote;
+    bool public _paused = false;
+
+    mapping(bytes32 => bool) public finalized;
+    mapping(bytes32 => uint256) public accountingSum;
+    mapping(address => bool) public depositableAsset;
+
+    // additional testing state
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public maxDepositLimit = type(uint256).max;
+    mapping(bytes32 => uint256) public finalizeSharesByGuid;
+    mapping(bytes32 => uint256) public minAmountOutByGuid; // Store minAmountOut for slippage check
+    bytes32 public lastGuid;
+    bool public revertOnInit;
+    bool public oracleAccountingEnabled;
+    address public escrow;
+
+    constructor(address _asset, uint32 _eid) {
+        assetToken = _asset;
+        localEid = _eid;
+    }
+
+    // IERC4626 minimal subset used by tests
+    function asset() external view returns (address) {
+        return assetToken;
+    }
+
+    function maxDeposit(address) external view returns (uint256) {
+        return maxDepositLimit;
+    }
+
+    function previewDeposit(uint256 assets) external pure returns (uint256) {
+        return assets;
+    }
+
+    function deposit(uint256 assets, address) external pure returns (uint256) {
+        return assets;
+    }
+
+    function deposit(address[] calldata, uint256[] calldata, address, uint256) external pure returns (uint256) {
+        return 1;
+    }
+
+    // IConfigurationFacet subset used by composer
+    function isHub() external view returns (bool) {
+        return isHubFlag;
+    }
+
+    function setIsHub(bool v) external {
+        isHubFlag = v;
+    }
+
+    function isAssetDepositable(address token) external view returns (bool) {
+        return depositableAsset[token];
+    }
+
+    function setDepositable(address token, bool v) external {
+        depositableAsset[token] = v;
+    }
+
+    function setMaxDeposit(uint256 v) external {
+        maxDepositLimit = v;
+    }
+
+    // IBridgeFacet
+    function quoteAccountingFee(bytes calldata) external view returns (uint256) {
+        return lastAccountingFeeQuote;
+    }
+
+    function setAccountingFee(uint256 v) external {
+        lastAccountingFeeQuote = v;
+    }
+
+    function initVaultActionRequest(
+        MoreVaultsLib.ActionType actionType,
+        bytes calldata actionCallData,
+        uint256 minAmountOut,
+        bytes calldata
+    )
+        external
+        payable
+        returns (bytes32 guid)
+    {
+        if (revertOnInit) revert("init-revert");
+        if (oracleAccountingEnabled) revert("AccountingViaOracles");
+        guid = bytes32(uint256(0x1));
+        lastGuid = guid;
+        minAmountOutByGuid[guid] = minAmountOut; // Store minAmountOut for slippage check
+        
+        // Call escrow.lockTokens() if escrow is set (matching real BridgeFacet behavior)
+        if (escrow != address(0)) {
+            uint256 value;
+            if (actionType == MoreVaultsLib.ActionType.MULTI_ASSETS_DEPOSIT) {
+                (,,,, value) = abi.decode(actionCallData, (address[], uint256[], address, uint256, uint256));
+            }
+            IMoreVaultsEscrow(escrow).lockTokens{value: value}(guid, actionType, actionCallData, minAmountOut, msg.sender);
+        }
+    }
+
+    function updateAccountingInfoForRequest(bytes32 guid, uint256 sum, bool) external {
+        accountingSum[guid] = sum;
+    }
+
+    function executeRequest(bytes32 guid) external payable {
+        // Check slippage if minAmountOut is set
+        uint256 minAmountOut = minAmountOutByGuid[guid];
+        if (minAmountOut > 0) {
+            uint256 resultValue = finalizeSharesByGuid[guid];
+            if (resultValue < minAmountOut) {
+                revert IBridgeFacet.SlippageExceeded(resultValue, minAmountOut);
+            }
+        }
+        finalized[guid] = true;
+    }
+
+    function setFinalizeShares(bytes32 guid, uint256 shares) external {
+        finalizeSharesByGuid[guid] = shares;
+    }
+
+    function setRevertOnInit(bool v) external {
+        revertOnInit = v;
+    }
+
+    function getLastGuid() external view returns (bytes32) {
+        return lastGuid;
+    }
+
+    function setOracleAccountingEnabled(bool v) external {
+        oracleAccountingEnabled = v;
+    }
+
+    function oraclesCrossChainAccounting() external view returns (bool) {
+        return oracleAccountingEnabled;
+    }
+
+    // ERC20-like minimal stubs for share token behavior
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(
+        address,
+        /*to*/
+        uint256 /*amount*/
+    )
+        external
+        pure
+        returns (bool)
+    {
+        return true;
+    }
+
+    function paused() external view returns (bool) {
+        return _paused;
+    }
+
+    function pause() external {
+        _paused = true;
+    }
+
+    function unpause() external {
+        _paused = false;
+    }
+
+    function getFinalizationResult(bytes32 guid) external view returns (uint256) {
+        return finalizeSharesByGuid[guid];
+    }
+
+    // IConfigurationFacet.getEscrow
+    function getEscrow() external view returns (address) {
+        return escrow;
+    }
+
+    function setEscrow(address _escrow) external {
+        escrow = _escrow;
+    }
+}

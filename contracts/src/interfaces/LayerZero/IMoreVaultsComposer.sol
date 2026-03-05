@@ -1,0 +1,117 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.22;
+
+import {IERC4626, IVaultFacet} from "../facets/IVaultFacet.sol";
+
+import {IOAppComposer} from "@layerzerolabs/oapp-evm/contracts/oapp/interfaces/IOAppComposer.sol";
+import {SendParam, MessagingFee} from "@layerzerolabs/oft-evm/contracts/interfaces/IOFT.sol";
+
+interface IMoreVaultsComposer is IOAppComposer {
+    /// ========================== EVENTS =====================================
+    event Sent(bytes32 indexed guid); // 0x27b5aea9
+    event Refunded(bytes32 indexed guid); // 0xfe509803
+
+    event Deposited(bytes32 sender, bytes32 recipient, uint32 dstEid, uint256 assetAmt, uint256 shareAmt); // 0xa53b96f2
+    event Rescued(address indexed _token, address indexed _to, uint256 indexed amountToRescue);
+
+    /// ========================== Error Messages =====================================
+    error ShareOFTNotAdapter(address shareOFT); // 0xfc1514ae
+    error ShareTokenNotVault(address shareERC20, address vault); // 0x0e178ab6
+    error AssetTokenNotVaultAsset(address assetERC20, address vaultAsset); // 0xba9d665f
+    error NotImplemented(); //
+    error OnlyEndpoint(address caller);
+    // 0x91ac5e4f
+    error OnlySelf(address caller); // 0xa19dbf00
+    error InvalidComposeCaller(address caller); // 0x84fb3f0d
+    error OnlyVaultOrLzAdapter(address caller); // custom
+    error DepositNotFound(bytes32 guid); // custom
+    error NotATokenOfOFT();
+
+    error InsufficientMsgValue(uint256 expectedMsgValue, uint256 actualMsgValue); // 0x7cb769dc
+    error NoMsgValueExpected(); // 0x7578d2bd
+
+    error SlippageExceeded(uint256 amountLD, uint256 minAmountLD); // 0x71c4efed
+    error AlreadyInitialized(); // custom
+    error VaultIsPaused();
+    error Unauthorized();
+    error ZeroAddress();
+    error InsufficientBalance();
+    error NativeTransferFailed();
+
+    /// @dev Structure to store pending async deposit information
+    struct PendingDeposit {
+        bytes32 depositor;
+        address tokenAddress;
+        address oftAddress;
+        uint256 assetAmount;
+        address refundAddress;
+        uint256 msgValue;
+        uint32 srcEid;
+        SendParam sendParam;
+    }
+
+    /// ========================== GLOBAL VARIABLE FUNCTIONS =====================================
+    function VAULT() external view returns (IVaultFacet);
+
+    function SHARE_OFT() external view returns (address);
+
+    function SHARE_ERC20() external view returns (address);
+
+    function ENDPOINT() external view returns (address);
+
+    function VAULT_EID() external view returns (uint32);
+
+    /// ========================== Proxy OFT (deposit-only) =====================================
+
+    function initialize(address _vault, address _shareOFT, address _vaultFactory) external;
+
+    /**
+     * @notice Returns the pending deposit info for the given guid
+     * @param guid The guid of the pending deposit
+     * @return The pending deposit info
+     */
+    function pendingDeposits(bytes32 guid) external view returns (PendingDeposit memory);
+
+    /**
+     * @notice Returns the total native pending amount (native currency locked in the composer to facilitate the async flow)
+     * @return The total native pending amount
+     */
+    function totalNativePending() external view returns (uint256);
+
+    /**
+     * @notice Quotes the send operation for the given OFT and SendParam
+     * @param from The "sender address" used for the quote
+     * @param targetOft The OFT contract address to quote
+     * @param vaultInAmount The amount of tokens to send to the vault
+     * @param sendParam The parameters for the send operation
+     * @return MessagingFee The estimated fee for the send operation
+     * @dev This function can be overridden to implement custom quoting logic
+     */
+    function quoteSend(address from, address targetOft, uint256 vaultInAmount, SendParam memory sendParam)
+        external
+        view
+        returns (MessagingFee memory);
+
+    function depositAndSend(
+        address tokenAddress,
+        uint256 assetAmount,
+        SendParam memory sendParam,
+        address refundAddress
+    ) external payable;
+
+    function initDeposit(
+        bytes32 depositor,
+        address tokenAddress,
+        address oftAddress,
+        uint256 assetAmount,
+        SendParam memory sendParam,
+        address refundAddress,
+        uint32 srcEid
+    ) external payable;
+
+    function sendDepositShares(bytes32 guid) external;
+
+    function refundDeposit(bytes32 guid) external payable;
+
+    function rescue(address _token, address payable _to, uint256 _amount) external;
+}

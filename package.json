@@ -1,0 +1,34 @@
+{
+  "name": "@more-vaults/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for MoreVaults protocol — viem/wagmi and ethers.js",
+  "type": "module",
+  "exports": {
+    "./viem": "./src/viem/index.ts",
+    "./ethers": "./src/ethers/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bash tests/run.sh"
+  },
+  "dependencies": {
+    "viem": "^2.21.0",
+    "ethers": "^6.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "peerDependencies": {
+    "viem": ">=2.0.0",
+    "ethers": ">=6.0.0"
+  },
+  "peerDependenciesMeta": {
+    "viem": { "optional": true },
+    "ethers": { "optional": true }
+  }
+}

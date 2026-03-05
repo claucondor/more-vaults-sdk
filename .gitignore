@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.js.map
+tests/addresses.json
+.env
