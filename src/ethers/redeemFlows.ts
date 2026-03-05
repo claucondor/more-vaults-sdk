@@ -12,7 +12,7 @@ import {
   ActionType,
 } from "./types";
 import type { ContractTransactionReceipt } from "ethers";
-import { preflightAsync } from "./preflight";
+import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -191,6 +191,9 @@ export async function redeemAsync(
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(provider, addresses.vault, addresses.escrow);
+
+  // Pre-flight: check hub has enough liquid assets — avoids wasting LZ fee on a guaranteed refund
+  await preflightRedeemLiquidity(provider, addresses.vault, shares);
 
   // CRITICAL: approve ESCROW for shares (the vault token itself)
   await ensureAllowance(signer, addresses.vault, addresses.escrow, shares);

@@ -15,7 +15,7 @@ import type {
 } from './types'
 import { ActionType } from './types'
 import { ensureAllowance } from './utils'
-import { preflightAsync } from './preflight'
+import { preflightAsync, preflightRedeemLiquidity } from './preflight'
 
 /**
  * R1 — Simple share redemption (ERC-4626 standard).
@@ -231,6 +231,9 @@ export async function redeemAsync(
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(publicClient, vault, escrow)
+
+  // Pre-flight: check hub has enough liquid assets — avoids wasting LZ fee on a guaranteed refund
+  await preflightRedeemLiquidity(publicClient, vault, shares)
 
   // Approve ESCROW for shares (vault share token is the vault itself for ERC-4626)
   await ensureAllowance(walletClient, publicClient, vault, escrow, shares)

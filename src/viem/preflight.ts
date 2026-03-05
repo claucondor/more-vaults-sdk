@@ -7,7 +7,7 @@
  */
 
 import { type Address, type PublicClient, getAddress, zeroAddress } from 'viem'
-import { CONFIG_ABI, BRIDGE_ABI } from './abis'
+import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI } from './abis'
 
 /**
  * Pre-flight checks for async cross-chain flows (D4 / D5 / R5).
@@ -91,6 +91,63 @@ export async function preflightAsync(
   if (isPaused) {
     throw new Error(
       `[MoreVaults] Vault ${vault} is paused. Cannot perform any actions.`,
+    )
+  }
+}
+
+/**
+ * Pre-flight liquidity check for async redeem (R5).
+ *
+ * Reads the hub's liquid balance of the underlying token and compares it
+ * against the assets the user expects to receive. If the hub does not hold
+ * enough liquid assets the redeem will be auto-refunded after the LZ round-trip,
+ * wasting the LayerZero fee.
+ *
+ * This check is best-effort: liquidity could change in the 1-5 minutes between
+ * submission and execution. But it catches the common case where the hub is
+ * already under-funded at the time of submission.
+ *
+ * @param publicClient  Public client for contract reads
+ * @param vault         Vault address (diamond proxy)
+ * @param shares        Shares the user intends to redeem
+ */
+export async function preflightRedeemLiquidity(
+  publicClient: PublicClient,
+  vault: Address,
+  shares: bigint,
+): Promise<void> {
+  const v = getAddress(vault)
+
+  // Need underlying address first
+  const underlying = await publicClient.readContract({
+    address: v,
+    abi: VAULT_ABI,
+    functionName: 'asset',
+  })
+
+  // Parallel: hub liquid balance + estimated assets for these shares
+  const [hubLiquid, assetsNeeded] = await Promise.all([
+    publicClient.readContract({
+      address: getAddress(underlying as Address),
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [v],
+    }),
+    publicClient.readContract({
+      address: v,
+      abi: VAULT_ABI,
+      functionName: 'convertToAssets',
+      args: [shares],
+    }),
+  ])
+
+  if ((hubLiquid as bigint) < (assetsNeeded as bigint)) {
+    throw new Error(
+      `[MoreVaults] Insufficient hub liquidity for redeem.\n` +
+      `  Hub liquid balance : ${hubLiquid}\n` +
+      `  Estimated required : ${assetsNeeded}\n` +
+      `Submitting this redeem will waste the LayerZero fee — the request will be auto-refunded.\n` +
+      `Ask the vault curator to repatriate liquidity from spoke chains first.`,
     )
   }
 }

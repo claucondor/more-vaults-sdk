@@ -48,6 +48,18 @@ export interface VaultStatus {
   underlying: Address
   totalAssets: bigint
   totalSupply: bigint
+  /**
+   * Underlying token balance held directly on the hub chain.
+   * This is the only portion that can be paid out to redeeming users immediately.
+   * (= ERC-20.balanceOf(vault) on the hub)
+   */
+  hubLiquidBalance: bigint
+  /**
+   * Approximate value deployed to spoke chains (totalAssets − hubLiquidBalance).
+   * These funds are NOT immediately redeemable — the vault curator must
+   * call executeBridging to repatriate them before large redeems can succeed.
+   */
+  spokesDeployedBalance: bigint
 
   // ── Issues — empty when everything is correctly configured ───────────────
   /**
@@ -88,7 +100,7 @@ export async function getVaultStatus(
 ): Promise<VaultStatus> {
   const v = getAddress(vault)
 
-  // All reads fire in parallel
+  // First batch: all reads that don't depend on other results
   const [
     isHub,
     isPaused,
@@ -114,6 +126,19 @@ export async function getVaultStatus(
     publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'totalAssets' }),
     publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'totalSupply' }),
   ])
+
+  // Second batch: needs underlying address from first batch
+  const hubLiquidBalance = await publicClient.readContract({
+    address: getAddress(underlying as Address),
+    abi: ERC20_ABI,
+    functionName: 'balanceOf',
+    args: [v],
+  })
+
+  const spokesDeployedBalance =
+    (totalAssets as bigint) > (hubLiquidBalance as bigint)
+      ? (totalAssets as bigint) - (hubLiquidBalance as bigint)
+      : 0n
 
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode
@@ -180,6 +205,8 @@ export async function getVaultStatus(
     underlying,
     totalAssets,
     totalSupply,
+    hubLiquidBalance,
+    spokesDeployedBalance,
     issues,
   }
 }

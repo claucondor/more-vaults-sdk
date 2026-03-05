@@ -8,7 +8,7 @@
 
 import { Contract, ZeroAddress } from "ethers";
 import type { Provider } from "ethers";
-import { CONFIG_ABI, BRIDGE_ABI } from "./abis";
+import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI } from "./abis";
 
 /**
  * Pre-flight checks for async cross-chain flows (D4 / D5 / R5).
@@ -73,6 +73,44 @@ export async function preflightAsync(
   if (isPaused) {
     throw new Error(
       `[MoreVaults] Vault ${vault} is paused. Cannot perform any actions.`
+    );
+  }
+}
+
+/**
+ * Pre-flight liquidity check for async redeem (R5).
+ *
+ * Reads the hub's liquid balance of the underlying token and compares it
+ * against the assets the user expects to receive. If the hub does not hold
+ * enough liquid assets the redeem will be auto-refunded after the LZ round-trip,
+ * wasting the LayerZero fee.
+ *
+ * @param provider  Read-only provider for contract reads
+ * @param vault     Vault address (diamond proxy)
+ * @param shares    Shares the user intends to redeem
+ */
+export async function preflightRedeemLiquidity(
+  provider: Provider,
+  vault: string,
+  shares: bigint
+): Promise<void> {
+  const vaultContract = new Contract(vault, VAULT_ABI, provider);
+
+  const underlying: string = await vaultContract.asset();
+
+  const underlyingContract = new Contract(underlying, ERC20_ABI, provider);
+  const [hubLiquid, assetsNeeded]: [bigint, bigint] = await Promise.all([
+    underlyingContract.balanceOf(vault),
+    vaultContract.convertToAssets(shares),
+  ]);
+
+  if (hubLiquid < assetsNeeded) {
+    throw new Error(
+      `[MoreVaults] Insufficient hub liquidity for redeem.\n` +
+      `  Hub liquid balance : ${hubLiquid}\n` +
+      `  Estimated required : ${assetsNeeded}\n` +
+      `Submitting this redeem will waste the LayerZero fee — the request will be auto-refunded.\n` +
+      `Ask the vault curator to repatriate liquidity from spoke chains first.`
     );
   }
 }
