@@ -4,9 +4,15 @@
  * All reads use Provider (read-only). Writes use Signer.
  */
 
-import { Contract, ZeroAddress } from "ethers";
+import { Contract, Interface, ZeroAddress } from "ethers";
 import type { Provider, Signer } from "ethers";
 import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI } from "./abis";
+
+// Multicall3 — deployed at the same address on every EVM chain
+const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MULTICALL3_ABI = [
+  "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[] returnData)",
+] as const;
 import type { CrossChainRequestInfo } from "./types";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -202,61 +208,67 @@ export async function getVaultStatus(
   provider: Provider,
   vault: string
 ): Promise<VaultStatus> {
-  const config = new Contract(vault, CONFIG_ABI, provider);
-  const bridge = new Contract(vault, BRIDGE_ABI, provider);
-  const vaultContract = new Contract(vault, VAULT_ABI, provider);
+  const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+  const configIface   = new Interface(CONFIG_ABI as unknown as string[]);
+  const bridgeIface   = new Interface(BRIDGE_ABI as unknown as string[]);
+  const vaultIface    = new Interface(VAULT_ABI  as unknown as string[]);
+  const decimalsIface = new Interface(["function decimals() view returns (uint8)"]);
 
-  // ── Batch 1: all reads that don't depend on other results ─────────────────
-  // Note: ethers.js doesn't have native multicall — these fire as parallel eth_call.
-  // For production use, pass a JsonRpcBatchProvider or a batching RPC endpoint.
-  const [
-    isHub,
-    isPaused,
-    oraclesEnabled,
-    ccManager,
-    escrow,
-    withdrawalQueueEnabled,
-    withdrawalTimelockSeconds,
-    maxDepositRaw,
-    underlying,
-    totalAssets,
-    totalSupply,
-    decimals,
-  ] = await Promise.all([
-    config.isHub() as Promise<boolean>,
-    config.paused() as Promise<boolean>,
-    bridge.oraclesCrossChainAccounting() as Promise<boolean>,
-    config.getCrossChainAccountingManager() as Promise<string>,
-    config.getEscrow() as Promise<string>,
-    config.getWithdrawalQueueStatus() as Promise<boolean>,
-    config.getWithdrawalTimelock() as Promise<bigint>,
-    // null sentinel: maxDeposit reverts on whitelisted vaults with address(0)
-    (config.maxDeposit(ZeroAddress) as Promise<bigint>).catch(() => null),
-    vaultContract.asset() as Promise<string>,
-    vaultContract.totalAssets() as Promise<bigint>,
-    vaultContract.totalSupply() as Promise<bigint>,
-    vaultContract.decimals() as Promise<bigint>,
-  ]);
+  // ── Batch 1: 12 calls → 1 eth_call via Multicall3.aggregate3 ─────────────
+  const b1Calls = [
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("isHub") },
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("paused") },
+    { target: vault, allowFailure: false, callData: bridgeIface.encodeFunctionData("oraclesCrossChainAccounting") },
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("getCrossChainAccountingManager") },
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("getEscrow") },
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("getWithdrawalQueueStatus") },
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("getWithdrawalTimelock") },
+    // allowFailure=true: maxDeposit reverts on whitelisted vaults with address(0)
+    { target: vault, allowFailure: true,  callData: configIface.encodeFunctionData("maxDeposit", [ZeroAddress]) },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("asset") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("totalAssets") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("totalSupply") },
+    { target: vault, allowFailure: false, callData: decimalsIface.encodeFunctionData("decimals") },
+  ];
 
-  const decimalsNum = Number(decimals ?? 18n);
-  const oneShare = 10n ** BigInt(decimalsNum);
+  const b1: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b1Calls);
 
-  // ── Batch 2: needs underlying + decimals from batch 1 ────────────────────
-  const underlyingContract = new Contract(underlying as string, ERC20_ABI, provider);
-  const [hubLiquidBalance, sharePrice]: [bigint, bigint] = await Promise.all([
-    underlyingContract.balanceOf(vault),
-    vaultContract.convertToAssets(oneShare),
-  ]);
+  const isHub             = configIface.decodeFunctionResult("isHub",                         b1[0].returnData)[0]  as boolean;
+  const isPaused          = configIface.decodeFunctionResult("paused",                         b1[1].returnData)[0]  as boolean;
+  const oraclesEnabled    = bridgeIface.decodeFunctionResult("oraclesCrossChainAccounting",    b1[2].returnData)[0]  as boolean;
+  const ccManager         = configIface.decodeFunctionResult("getCrossChainAccountingManager", b1[3].returnData)[0]  as string;
+  const escrow            = configIface.decodeFunctionResult("getEscrow",                      b1[4].returnData)[0]  as string;
+  const withdrawalQueueEnabled    = configIface.decodeFunctionResult("getWithdrawalQueueStatus", b1[5].returnData)[0] as boolean;
+  const withdrawalTimelockSeconds = configIface.decodeFunctionResult("getWithdrawalTimelock",    b1[6].returnData)[0] as bigint;
+  // null sentinel: reverted means whitelist/ACL
+  const maxDepositRaw     = b1[7].success
+    ? configIface.decodeFunctionResult("maxDeposit", b1[7].returnData)[0] as bigint
+    : null;
+  const underlying        = vaultIface.decodeFunctionResult("asset",         b1[8].returnData)[0]  as string;
+  const totalAssets       = vaultIface.decodeFunctionResult("totalAssets",   b1[9].returnData)[0]  as bigint;
+  const totalSupply       = vaultIface.decodeFunctionResult("totalSupply",   b1[10].returnData)[0] as bigint;
+  const decimalsRaw       = decimalsIface.decodeFunctionResult("decimals",    b1[11].returnData)[0];
+  const decimalsNum       = Number(decimalsRaw);
+  const oneShare          = 10n ** BigInt(decimalsNum);
 
-  const spokesDeployedBalance: bigint =
-    (totalAssets as bigint) > hubLiquidBalance
-      ? (totalAssets as bigint) - hubLiquidBalance
-      : 0n;
+  // ── Batch 2: 2 calls → 1 eth_call (depends on underlying + decimals) ─────
+  const erc20Iface = new Interface(ERC20_ABI as unknown as string[]);
+  const b2Calls = [
+    { target: underlying, allowFailure: false, callData: erc20Iface.encodeFunctionData("balanceOf", [vault]) },
+    { target: vault,      allowFailure: false, callData: vaultIface.encodeFunctionData("convertToAssets", [oneShare]) },
+  ];
+
+  const b2: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b2Calls);
+
+  const hubLiquidBalance = erc20Iface.decodeFunctionResult("balanceOf",      b2[0].returnData)[0] as bigint;
+  const sharePrice       = vaultIface.decodeFunctionResult("convertToAssets", b2[1].returnData)[0] as bigint;
+
+  const spokesDeployedBalance: bigint = totalAssets > hubLiquidBalance ? totalAssets - hubLiquidBalance : 0n;
 
   // null = maxDeposit reverted → whitelist/ACL vault
   const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
   const depositAccessRestricted = maxDepositRaw === null;
-  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : (maxDepositRaw as bigint);
+  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : maxDepositRaw!;
 
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode;
@@ -314,15 +326,15 @@ export async function getVaultStatus(
   }
 
   // ── maxImmediateRedeemAssets ────────────────────────────────────────────────
-  const maxImmediateRedeemAssets: bigint = isHub && !oraclesEnabled ? hubLiquidBalance : (totalAssets as bigint);
+  const maxImmediateRedeemAssets: bigint = isHub && !oraclesEnabled ? hubLiquidBalance : totalAssets;
 
   if (isHub) {
     if (hubLiquidBalance === 0n) {
       issues.push(
         `Hub has no liquid assets (hubLiquidBalance = 0). All redeems will be auto-refunded until the curator repatriates funds from spokes via executeBridging().`
       );
-    } else if ((totalAssets as bigint) > 0n && hubLiquidBalance * 10n < (totalAssets as bigint)) {
-      const pct = Number((hubLiquidBalance * 10000n) / (totalAssets as bigint)) / 100;
+    } else if (totalAssets > 0n && hubLiquidBalance * 10n < totalAssets) {
+      const pct = Number((hubLiquidBalance * 10000n) / totalAssets) / 100;
       issues.push(
         `Low hub liquidity: ${hubLiquidBalance} units liquid on hub (${pct.toFixed(1)}% of TVL). ` +
         `Redeems above ${hubLiquidBalance} underlying units will be auto-refunded. ` +
@@ -330,7 +342,7 @@ export async function getVaultStatus(
       );
     }
     if (spokesDeployedBalance > 0n) {
-      const total = totalAssets as bigint;
+      const total = totalAssets;
       issues.push(
         `${spokesDeployedBalance} units (~${((Number(spokesDeployedBalance) / Number(total || 1n)) * 100).toFixed(1)}% of TVL) ` +
         `are deployed on spoke chains earning yield. These are NOT immediately redeemable — ` +
