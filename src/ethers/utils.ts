@@ -60,6 +60,13 @@ export interface VaultStatus {
   underlying: string;
   totalAssets: bigint;
   totalSupply: bigint;
+  /** Vault share token decimals. Use this for display — never hardcode 18. */
+  decimals: number;
+  /**
+   * Price of 1 full share expressed in underlying token units.
+   * = convertToAssets(10^decimals). Grows over time as the vault earns yield.
+   */
+  sharePrice: bigint;
   /**
    * Underlying token balance held directly on the hub chain.
    * This is the only portion that can be paid out to redeeming users immediately.
@@ -199,7 +206,9 @@ export async function getVaultStatus(
   const bridge = new Contract(vault, BRIDGE_ABI, provider);
   const vaultContract = new Contract(vault, VAULT_ABI, provider);
 
-  // First batch: all reads that don't depend on other results
+  // ── Batch 1: all reads that don't depend on other results ─────────────────
+  // Note: ethers.js doesn't have native multicall — these fire as parallel eth_call.
+  // For production use, pass a JsonRpcBatchProvider or a batching RPC endpoint.
   const [
     isHub,
     isPaused,
@@ -208,10 +217,11 @@ export async function getVaultStatus(
     escrow,
     withdrawalQueueEnabled,
     withdrawalTimelockSeconds,
-    remainingDepositCapacity,
+    maxDepositRaw,
     underlying,
     totalAssets,
     totalSupply,
+    decimals,
   ] = await Promise.all([
     config.isHub() as Promise<boolean>,
     config.paused() as Promise<boolean>,
@@ -220,26 +230,33 @@ export async function getVaultStatus(
     config.getEscrow() as Promise<string>,
     config.getWithdrawalQueueStatus() as Promise<boolean>,
     config.getWithdrawalTimelock() as Promise<bigint>,
-    // maxDeposit may revert on whitelisted vaults when called with address(0).
-    // Use null as sentinel to distinguish "reverted" from "returned 0 (full)".
+    // null sentinel: maxDeposit reverts on whitelisted vaults with address(0)
     (config.maxDeposit(ZeroAddress) as Promise<bigint>).catch(() => null),
     vaultContract.asset() as Promise<string>,
     vaultContract.totalAssets() as Promise<bigint>,
     vaultContract.totalSupply() as Promise<bigint>,
+    vaultContract.decimals() as Promise<bigint>,
   ]);
 
-  // Second batch: needs underlying address from first batch
+  const decimalsNum = Number(decimals ?? 18n);
+  const oneShare = 10n ** BigInt(decimalsNum);
+
+  // ── Batch 2: needs underlying + decimals from batch 1 ────────────────────
   const underlyingContract = new Contract(underlying as string, ERC20_ABI, provider);
-  const hubLiquidBalance: bigint = await underlyingContract.balanceOf(vault);
+  const [hubLiquidBalance, sharePrice]: [bigint, bigint] = await Promise.all([
+    underlyingContract.balanceOf(vault),
+    vaultContract.convertToAssets(oneShare),
+  ]);
+
   const spokesDeployedBalance: bigint =
     (totalAssets as bigint) > hubLiquidBalance
       ? (totalAssets as bigint) - hubLiquidBalance
       : 0n;
 
-  // null sentinel means maxDeposit reverted (whitelisted / access-controlled vault)
+  // null = maxDeposit reverted → whitelist/ACL vault
   const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
-  const depositAccessRestricted = remainingDepositCapacity === null;
-  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : (remainingDepositCapacity as bigint);
+  const depositAccessRestricted = maxDepositRaw === null;
+  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : (maxDepositRaw as bigint);
 
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode;
@@ -297,7 +314,7 @@ export async function getVaultStatus(
   }
 
   // ── maxImmediateRedeemAssets ────────────────────────────────────────────────
-  const maxImmediateRedeemAssets: bigint = isHub && !oraclesEnabled ? hubLiquidBalance : totalAssets as bigint;
+  const maxImmediateRedeemAssets: bigint = isHub && !oraclesEnabled ? hubLiquidBalance : (totalAssets as bigint);
 
   if (isHub) {
     if (hubLiquidBalance === 0n) {
@@ -338,6 +355,8 @@ export async function getVaultStatus(
     underlying,
     totalAssets,
     totalSupply,
+    decimals: decimalsNum,
+    sharePrice,
     hubLiquidBalance,
     spokesDeployedBalance,
     maxImmediateRedeemAssets,

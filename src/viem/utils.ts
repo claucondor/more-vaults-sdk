@@ -5,7 +5,7 @@ import {
   getAddress,
   zeroAddress,
 } from 'viem'
-import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI } from './abis'
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,6 +60,13 @@ export interface VaultStatus {
   underlying: Address
   totalAssets: bigint
   totalSupply: bigint
+  /** Vault share token decimals. Use this for display — never hardcode 18. */
+  decimals: number
+  /**
+   * Price of 1 full share expressed in underlying token units.
+   * = convertToAssets(10^decimals). Grows over time as the vault earns yield.
+   */
+  sharePrice: bigint
   /**
    * Underlying token balance held directly on the hub chain.
    * This is the only portion that can be paid out to redeeming users immediately.
@@ -119,53 +126,59 @@ export async function getVaultStatus(
 ): Promise<VaultStatus> {
   const v = getAddress(vault)
 
-  // First batch: all reads that don't depend on other results
-  const [
-    isHub,
-    isPaused,
-    oraclesEnabled,
-    ccManager,
-    escrow,
-    withdrawalQueueEnabled,
-    withdrawalTimelockSeconds,
-    remainingDepositCapacity,
-    underlying,
-    totalAssets,
-    totalSupply,
-  ] = await Promise.all([
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'isHub' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'paused' }),
-    publicClient.readContract({ address: v, abi: BRIDGE_ABI, functionName: 'oraclesCrossChainAccounting' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getCrossChainAccountingManager' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getEscrow' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getWithdrawalQueueStatus' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getWithdrawalTimelock' }),
-    // maxDeposit may revert on whitelisted vaults when called with address(0).
-    // Use null as sentinel to distinguish "reverted" from "returned 0 (full)".
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'maxDeposit', args: [zeroAddress] })
-      .catch(() => null),
-    publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'asset' }),
-    publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'totalAssets' }),
-    publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'totalSupply' }),
-  ])
-
-  // Second batch: needs underlying address from first batch
-  const hubLiquidBalance = await publicClient.readContract({
-    address: getAddress(underlying as Address),
-    abi: ERC20_ABI,
-    functionName: 'balanceOf',
-    args: [v],
+  // ── Batch 1: single multicall — 12 reads, 1 HTTP request ─────────────────
+  // maxDeposit(address(0)) may revert on whitelisted vaults — allowFailure handles it.
+  const b1 = await publicClient.multicall({
+    contracts: [
+      { address: v, abi: CONFIG_ABI,  functionName: 'isHub' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'paused' },
+      { address: v, abi: BRIDGE_ABI,  functionName: 'oraclesCrossChainAccounting' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'getCrossChainAccountingManager' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'getEscrow' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'getWithdrawalQueueStatus' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'getWithdrawalTimelock' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'maxDeposit', args: [zeroAddress] },
+      { address: v, abi: VAULT_ABI,   functionName: 'asset' },
+      { address: v, abi: VAULT_ABI,   functionName: 'totalAssets' },
+      { address: v, abi: VAULT_ABI,   functionName: 'totalSupply' },
+      { address: v, abi: METADATA_ABI, functionName: 'decimals' },
+    ] as const,
+    allowFailure: true,
   })
 
-  const spokesDeployedBalance =
-    (totalAssets as bigint) > (hubLiquidBalance as bigint)
-      ? (totalAssets as bigint) - (hubLiquidBalance as bigint)
-      : 0n
+  const isHub               = b1[0].status  === 'success' ? b1[0].result  as boolean : false
+  const isPaused            = b1[1].status  === 'success' ? b1[1].result  as boolean : false
+  const oraclesEnabled      = b1[2].status  === 'success' ? b1[2].result  as boolean : false
+  const ccManager           = b1[3].status  === 'success' ? b1[3].result  as Address : zeroAddress
+  const escrow              = b1[4].status  === 'success' ? b1[4].result  as Address : zeroAddress
+  const withdrawalQueueEnabled     = b1[5].status === 'success' ? b1[5].result as boolean : false
+  const withdrawalTimelockSeconds  = b1[6].status === 'success' ? b1[6].result as bigint  : 0n
+  // null = reverted (whitelist/ACL), bigint = normal return
+  const maxDepositRaw       = b1[7].status  === 'success' ? b1[7].result  as bigint  : null
+  const underlying          = b1[8].status  === 'success' ? b1[8].result  as Address : zeroAddress
+  const totalAssets         = b1[9].status  === 'success' ? b1[9].result  as bigint  : 0n
+  const totalSupply         = b1[10].status === 'success' ? b1[10].result as bigint  : 0n
+  const decimals            = b1[11].status === 'success' ? Number(b1[11].result)    : 18
 
-  // null sentinel means maxDeposit reverted (whitelisted / access-controlled vault)
+  // ── Batch 2: depends on underlying + decimals from batch 1 ────────────────
+  const oneShare = 10n ** BigInt(decimals)
+  const b2 = await publicClient.multicall({
+    contracts: [
+      { address: getAddress(underlying), abi: ERC20_ABI,  functionName: 'balanceOf',      args: [v] },
+      { address: v,                      abi: VAULT_ABI,  functionName: 'convertToAssets', args: [oneShare] },
+    ] as const,
+    allowFailure: true,
+  })
+
+  const hubLiquidBalance = b2[0].status === 'success' ? b2[0].result as bigint : 0n
+  const sharePrice       = b2[1].status === 'success' ? b2[1].result as bigint : 0n
+
+  const spokesDeployedBalance = totalAssets > hubLiquidBalance ? totalAssets - hubLiquidBalance : 0n
+
+  // null = maxDeposit reverted → whitelist/ACL vault
   const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
-  const depositAccessRestricted = remainingDepositCapacity === null
-  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : (remainingDepositCapacity as bigint)
+  const depositAccessRestricted = maxDepositRaw === null
+  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : maxDepositRaw
 
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode
@@ -198,11 +211,7 @@ export async function getVaultStatus(
   }
 
   // ── maxImmediateRedeemAssets ───────────────────────────────────────────────
-  // For hub vaults: only the hub liquid balance can be paid out right now.
-  // For local/oracle vaults: all assets are on-chain and redeemable.
-  const hubLiquid = hubLiquidBalance as bigint
-  const totalA = totalAssets as bigint
-  const maxImmediateRedeemAssets = isHub && !oraclesEnabled ? hubLiquid : totalA
+  const maxImmediateRedeemAssets = isHub && !oraclesEnabled ? hubLiquidBalance : totalAssets
 
   // ── Issues ─────────────────────────────────────────────────────────────────
   const issues: string[] = []
@@ -227,25 +236,23 @@ export async function getVaultStatus(
     )
   }
   if (isHub) {
-    // Liquidity context — always included for hub vaults so LLMs/dashboards have full picture
-    if (hubLiquid === 0n) {
+    if (hubLiquidBalance === 0n) {
       issues.push(
         `Hub has no liquid assets (hubLiquidBalance = 0). All redeems will be auto-refunded until the curator repatriates funds from spokes via executeBridging().`,
       )
-    } else if (totalA > 0n && hubLiquid * 10n < totalA) {
-      // Hub holds < 10 % of TVL
-      const pct = Number((hubLiquid * 10000n) / totalA) / 100
+    } else if (totalAssets > 0n && hubLiquidBalance * 10n < totalAssets) {
+      const pct = Number((hubLiquidBalance * 10000n) / totalAssets) / 100
       issues.push(
-        `Low hub liquidity: ${hubLiquid} units liquid on hub (${pct.toFixed(1)}% of TVL). ` +
-        `Redeems above ${hubLiquid} underlying units will be auto-refunded. ` +
+        `Low hub liquidity: ${hubLiquidBalance} units liquid on hub (${pct.toFixed(1)}% of TVL). ` +
+        `Redeems above ${hubLiquidBalance} underlying units will be auto-refunded. ` +
         `Curator must call executeBridging() to repatriate from spokes.`,
       )
     }
     if (spokesDeployedBalance > 0n) {
+      const pct = ((Number(spokesDeployedBalance) / Number(totalAssets || 1n)) * 100).toFixed(1)
       issues.push(
-        `${spokesDeployedBalance} units (~${((Number(spokesDeployedBalance) / Number(totalA || 1n)) * 100).toFixed(1)}% of TVL) ` +
-        `are deployed on spoke chains earning yield. These are NOT immediately redeemable — ` +
-        `they require a curator repatriation (executeBridging) before users can withdraw them.`,
+        `${spokesDeployedBalance} units (~${pct}% of TVL) are deployed on spoke chains earning yield. ` +
+        `These are NOT immediately redeemable — they require a curator repatriation (executeBridging) before users can withdraw them.`,
       )
     }
   }
@@ -266,7 +273,9 @@ export async function getVaultStatus(
     underlying,
     totalAssets,
     totalSupply,
-    hubLiquidBalance: hubLiquid,
+    decimals,
+    sharePrice,
+    hubLiquidBalance,
     spokesDeployedBalance,
     maxImmediateRedeemAssets,
     issues,
