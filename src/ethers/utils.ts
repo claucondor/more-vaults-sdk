@@ -42,8 +42,19 @@ export interface VaultStatus {
   withdrawalTimelockSeconds: bigint;
 
   // ── Capacity ───────────────────────────────────────────────────────────────
-  /** Remaining deposit capacity in underlying token decimals (type(uint256).max = unlimited) */
+  /**
+   * Remaining deposit capacity in underlying token decimals.
+   * `type(uint256).max` = no cap configured (unlimited).
+   * `0n` = vault is full — no more deposits accepted.
+   * If `depositAccessRestricted = true`, this value is `type(uint256).max` but
+   * deposits are still gated by whitelist or other access control.
+   */
   remainingDepositCapacity: bigint;
+  /**
+   * True when `maxDeposit(address(0))` reverted, indicating the vault uses
+   * whitelist or other access control to restrict who can deposit.
+   */
+  depositAccessRestricted: boolean;
 
   // ── Vault metrics ──────────────────────────────────────────────────────────
   underlying: string;
@@ -61,6 +72,12 @@ export interface VaultStatus {
    * call executeBridging to repatriate them before large redeems can succeed.
    */
   spokesDeployedBalance: bigint;
+  /**
+   * Maximum assets that can be redeemed right now without curator intervention.
+   * - For hub vaults: equals `hubLiquidBalance`.
+   * - For local/oracle vaults: equals `totalAssets`.
+   */
+  maxImmediateRedeemAssets: bigint;
 
   // ── Issues — empty when everything is correctly configured ─────────────────
   /**
@@ -203,7 +220,9 @@ export async function getVaultStatus(
     config.getEscrow() as Promise<string>,
     config.getWithdrawalQueueStatus() as Promise<boolean>,
     config.getWithdrawalTimelock() as Promise<bigint>,
-    config.maxDeposit(ZeroAddress) as Promise<bigint>,
+    // maxDeposit may revert on whitelisted vaults when called with address(0).
+    // Use null as sentinel to distinguish "reverted" from "returned 0 (full)".
+    (config.maxDeposit(ZeroAddress) as Promise<bigint>).catch(() => null),
     vaultContract.asset() as Promise<string>,
     vaultContract.totalAssets() as Promise<bigint>,
     vaultContract.totalSupply() as Promise<bigint>,
@@ -217,11 +236,16 @@ export async function getVaultStatus(
       ? (totalAssets as bigint) - hubLiquidBalance
       : 0n;
 
+  // null sentinel means maxDeposit reverted (whitelisted / access-controlled vault)
+  const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
+  const depositAccessRestricted = remainingDepositCapacity === null;
+  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : (remainingDepositCapacity as bigint);
+
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode;
   if (isPaused) {
     mode = "paused";
-  } else if (remainingDepositCapacity === 0n) {
+  } else if (effectiveCapacity === 0n) {
     mode = "full";
   } else if (!isHub) {
     mode = "local";
@@ -253,7 +277,7 @@ export async function getVaultStatus(
   if (isPaused) {
     issues.push("Vault is paused — no deposits or redeems are possible.");
   }
-  if (remainingDepositCapacity === 0n && !isPaused) {
+  if (effectiveCapacity === 0n && !isPaused) {
     issues.push(
       "Deposit capacity is full — increase depositCapacity via setDepositCapacity()."
     );
@@ -268,6 +292,35 @@ export async function getVaultStatus(
       "Escrow not configured in registry — async flows will revert. Set the escrow via the MoreVaultsRegistry."
     );
   }
+  if (depositAccessRestricted) {
+    issues.push("Deposit access is restricted (whitelist or other access control). Only approved addresses can deposit.");
+  }
+
+  // ── maxImmediateRedeemAssets ────────────────────────────────────────────────
+  const maxImmediateRedeemAssets: bigint = isHub && !oraclesEnabled ? hubLiquidBalance : totalAssets as bigint;
+
+  if (isHub) {
+    if (hubLiquidBalance === 0n) {
+      issues.push(
+        `Hub has no liquid assets (hubLiquidBalance = 0). All redeems will be auto-refunded until the curator repatriates funds from spokes via executeBridging().`
+      );
+    } else if ((totalAssets as bigint) > 0n && hubLiquidBalance * 10n < (totalAssets as bigint)) {
+      const pct = Number((hubLiquidBalance * 10000n) / (totalAssets as bigint)) / 100;
+      issues.push(
+        `Low hub liquidity: ${hubLiquidBalance} units liquid on hub (${pct.toFixed(1)}% of TVL). ` +
+        `Redeems above ${hubLiquidBalance} underlying units will be auto-refunded. ` +
+        `Curator must call executeBridging() to repatriate from spokes.`
+      );
+    }
+    if (spokesDeployedBalance > 0n) {
+      const total = totalAssets as bigint;
+      issues.push(
+        `${spokesDeployedBalance} units (~${((Number(spokesDeployedBalance) / Number(total || 1n)) * 100).toFixed(1)}% of TVL) ` +
+        `are deployed on spoke chains earning yield. These are NOT immediately redeemable — ` +
+        `they require a curator repatriation (executeBridging) before users can withdraw them.`
+      );
+    }
+  }
 
   return {
     mode,
@@ -280,12 +333,14 @@ export async function getVaultStatus(
     escrow,
     withdrawalQueueEnabled,
     withdrawalTimelockSeconds: BigInt(withdrawalTimelockSeconds),
-    remainingDepositCapacity,
+    remainingDepositCapacity: effectiveCapacity,
+    depositAccessRestricted,
     underlying,
     totalAssets,
     totalSupply,
     hubLiquidBalance,
     spokesDeployedBalance,
+    maxImmediateRedeemAssets,
     issues,
   };
 }

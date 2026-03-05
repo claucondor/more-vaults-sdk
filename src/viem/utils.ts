@@ -41,8 +41,20 @@ export interface VaultStatus {
   withdrawalTimelockSeconds: bigint
 
   // ── Capacity ─────────────────────────────────────────────────────────────
-  /** Remaining deposit capacity in underlying token decimals (type(uint256).max = unlimited) */
+  /**
+   * Remaining deposit capacity in underlying token decimals.
+   * `type(uint256).max` = no cap configured (unlimited).
+   * `0n` = vault is full — no more deposits accepted.
+   * If `depositAccessRestricted = true`, this value is `type(uint256).max` but
+   * deposits are still gated by whitelist or other access control.
+   */
   remainingDepositCapacity: bigint
+  /**
+   * True when `maxDeposit(address(0))` reverted, indicating the vault uses
+   * whitelist or other access control to restrict who can deposit.
+   * Deposit flows will succeed only for addresses the vault operator has approved.
+   */
+  depositAccessRestricted: boolean
 
   // ── Vault metrics ────────────────────────────────────────────────────────
   underlying: Address
@@ -60,6 +72,13 @@ export interface VaultStatus {
    * call executeBridging to repatriate them before large redeems can succeed.
    */
   spokesDeployedBalance: bigint
+  /**
+   * Maximum assets that can be redeemed right now without curator intervention.
+   * - For hub vaults: equals `hubLiquidBalance` (only what the hub holds).
+   * - For local/oracle vaults: equals `totalAssets` (all assets are local).
+   * Attempting to redeem more than this will revert (R1) or be auto-refunded (R5).
+   */
+  maxImmediateRedeemAssets: bigint
 
   // ── Issues — empty when everything is correctly configured ───────────────
   /**
@@ -121,7 +140,10 @@ export async function getVaultStatus(
     publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getEscrow' }),
     publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getWithdrawalQueueStatus' }),
     publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'getWithdrawalTimelock' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'maxDeposit', args: [zeroAddress] }),
+    // maxDeposit may revert on whitelisted vaults when called with address(0).
+    // Use null as sentinel to distinguish "reverted" from "returned 0 (full)".
+    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'maxDeposit', args: [zeroAddress] })
+      .catch(() => null),
     publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'asset' }),
     publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'totalAssets' }),
     publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'totalSupply' }),
@@ -140,11 +162,16 @@ export async function getVaultStatus(
       ? (totalAssets as bigint) - (hubLiquidBalance as bigint)
       : 0n
 
+  // null sentinel means maxDeposit reverted (whitelisted / access-controlled vault)
+  const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
+  const depositAccessRestricted = remainingDepositCapacity === null
+  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : (remainingDepositCapacity as bigint)
+
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode
   if (isPaused) {
     mode = 'paused'
-  } else if (remainingDepositCapacity === 0n) {
+  } else if (effectiveCapacity === 0n) {
     mode = 'full'
   } else if (!isHub) {
     mode = 'local'
@@ -170,14 +197,24 @@ export async function getVaultStatus(
     recommendedRedeemFlow = 'redeemShares'
   }
 
+  // ── maxImmediateRedeemAssets ───────────────────────────────────────────────
+  // For hub vaults: only the hub liquid balance can be paid out right now.
+  // For local/oracle vaults: all assets are on-chain and redeemable.
+  const hubLiquid = hubLiquidBalance as bigint
+  const totalA = totalAssets as bigint
+  const maxImmediateRedeemAssets = isHub && !oraclesEnabled ? hubLiquid : totalA
+
   // ── Issues ─────────────────────────────────────────────────────────────────
   const issues: string[] = []
 
   if (isPaused) {
     issues.push('Vault is paused — no deposits or redeems are possible.')
   }
-  if (remainingDepositCapacity === 0n && !isPaused) {
+  if (effectiveCapacity === 0n && !isPaused) {
     issues.push('Deposit capacity is full — increase depositCapacity via setDepositCapacity().')
+  }
+  if (depositAccessRestricted) {
+    issues.push('Deposit access is restricted (whitelist or other access control). Only approved addresses can deposit.')
   }
   if (isHub && !oraclesEnabled && ccManager === zeroAddress) {
     issues.push(
@@ -188,6 +225,29 @@ export async function getVaultStatus(
     issues.push(
       'Escrow not configured in registry — async flows will revert. Set the escrow via the MoreVaultsRegistry.',
     )
+  }
+  if (isHub) {
+    // Liquidity context — always included for hub vaults so LLMs/dashboards have full picture
+    if (hubLiquid === 0n) {
+      issues.push(
+        `Hub has no liquid assets (hubLiquidBalance = 0). All redeems will be auto-refunded until the curator repatriates funds from spokes via executeBridging().`,
+      )
+    } else if (totalA > 0n && hubLiquid * 10n < totalA) {
+      // Hub holds < 10 % of TVL
+      const pct = Number((hubLiquid * 10000n) / totalA) / 100
+      issues.push(
+        `Low hub liquidity: ${hubLiquid} units liquid on hub (${pct.toFixed(1)}% of TVL). ` +
+        `Redeems above ${hubLiquid} underlying units will be auto-refunded. ` +
+        `Curator must call executeBridging() to repatriate from spokes.`,
+      )
+    }
+    if (spokesDeployedBalance > 0n) {
+      issues.push(
+        `${spokesDeployedBalance} units (~${((Number(spokesDeployedBalance) / Number(totalA || 1n)) * 100).toFixed(1)}% of TVL) ` +
+        `are deployed on spoke chains earning yield. These are NOT immediately redeemable — ` +
+        `they require a curator repatriation (executeBridging) before users can withdraw them.`,
+      )
+    }
   }
 
   return {
@@ -201,12 +261,14 @@ export async function getVaultStatus(
     escrow,
     withdrawalQueueEnabled,
     withdrawalTimelockSeconds: BigInt(withdrawalTimelockSeconds),
-    remainingDepositCapacity,
+    remainingDepositCapacity: effectiveCapacity,
+    depositAccessRestricted,
     underlying,
     totalAssets,
     totalSupply,
-    hubLiquidBalance,
+    hubLiquidBalance: hubLiquid,
     spokesDeployedBalance,
+    maxImmediateRedeemAssets,
     issues,
   }
 }
