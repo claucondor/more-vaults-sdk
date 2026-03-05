@@ -1,27 +1,6 @@
 # @more-vaults/sdk
 
-TypeScript SDK for the MoreVaults protocol. Supports both **viem/wagmi** and **ethers.js v6**.
-
-## Structure
-
-```
-more-vaults-sdk/
-├── src/
-│   ├── viem/     ← viem/wagmi SDK
-│   └── ethers/   ← ethers.js v6 SDK
-├── tests/        ← integration tests (require Foundry + Anvil)
-│   ├── test-flows.ts
-│   ├── test-ethers-flows.ts
-│   ├── test-user-helpers.ts
-│   ├── test-ethers-user-helpers.ts
-│   └── run.sh
-└── contracts/    ← Solidity source + mocks for running tests
-    ├── src/      ← protocol contracts
-    ├── test/
-    │   ├── mocks/
-    │   └── e2e/
-    └── scripts/  ← DeployLocalE2E.s.sol
-```
+TypeScript SDK for the MoreVaults protocol. Supports **viem/wagmi** and **ethers.js v6**.
 
 ## Install
 
@@ -29,123 +8,100 @@ more-vaults-sdk/
 npm install
 ```
 
-## Usage (viem)
+## Quick start
 
-```typescript
-import { depositSimple, redeemShares, getUserPosition } from './src/viem/index.js'
-import { createPublicClient, createWalletClient, http } from 'viem'
+### viem / wagmi
+
+```ts
+import { depositSimple, redeemShares, getUserPosition, getVaultStatus } from './src/viem/index.js'
+import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 
 const publicClient = createPublicClient({ chain: flowEvm, transport: http(RPC_URL) })
 const walletClient = createWalletClient({ account, chain: flowEvm, transport: http(RPC_URL) })
 
-const addresses = {
-  vault: '0x...hub vault address...',
-  escrow: '0x...escrow address...',
-}
+const addresses = { vault: '0x...', escrow: '0x...' }
+
+// Check which flow to use
+const status = await getVaultStatus(publicClient, addresses.vault)
+// status.recommendedDepositFlow → 'depositSimple' | 'depositAsync' | 'none'
 
 // Deposit
-await depositSimple(walletClient, publicClient, addresses, parseUnits('100', 6), account.address)
+const { txHash, shares } = await depositSimple(walletClient, publicClient, addresses, parseUnits('100', 6), account.address)
 
-// Read position
+// Read user position
 const position = await getUserPosition(publicClient, addresses.vault, account.address)
 ```
 
-## Usage (ethers.js)
+### ethers.js
 
-```typescript
+```ts
 import { depositSimple, getUserPosition } from './src/ethers/index.js'
-import { JsonRpcProvider, Wallet, parseUnits } from 'ethers'
+import { BrowserProvider } from 'ethers'  // or JsonRpcProvider for Node.js
 
-const provider = new JsonRpcProvider(RPC_URL)
-const signer = new Wallet(PRIVATE_KEY, provider)
+const provider = new BrowserProvider(window.ethereum)
+const signer = await provider.getSigner()
 
-const addresses = { vault: '0x...', escrow: '0x...' }
-
-await depositSimple(signer, addresses, parseUnits('100', 6), signer.address)
+const { txHash, shares } = await depositSimple(signer, { vault: '0x...', escrow: '0x...' }, parseUnits('100', 6), signer.address)
 ```
 
-## Cross-chain: spoke → hub (Flow EVM)
+## Flows
 
-```typescript
-import { depositFromSpoke } from './src/viem/index.js'
+### Deposit
 
-// walletClient on the SPOKE chain (e.g. Arbitrum)
-await depositFromSpoke(
-  spokeWalletClient,
-  spokePublicClient,
-  USDC_OFT_ON_SPOKE,   // OFT address on spoke
-  30332,               // Flow EVM LayerZero EID
-  HUB_VAULT_ADDRESS,
-  parseUnits('100', 6),
-  account.address,
-  lzFee,               // quote via OFT.quoteSend()
-)
-```
+| ID | Function | When to use | Doc |
+|----|----------|-------------|-----|
+| D1 | `depositSimple` | User on hub (Flow EVM), oracle ON or local vault | [D1](./docs/flows/D1-deposit-simple.md) |
+| D2 | `depositMultiAsset` | Deposit multiple tokens in one call | [D2](./docs/flows/D2-deposit-multi-asset.md) |
+| D3 | `depositCrossChainOracleOn` | Alias for D1 — hub with oracle ON, hub chain only | [D3](./docs/flows/D3-deposit-oracle-on.md) |
+| D4 | `depositAsync` | Hub with oracle OFF — async LZ Read flow | [D4](./docs/flows/D4-deposit-async.md) |
+| D5 | `mintAsync` | Same as D4 but specify exact shares | [D5](./docs/flows/D5-mint-async.md) |
+| D6/D7 | `depositFromSpoke` | User on another chain — bridge via LZ OFT | [D6/D7](./docs/flows/D6-D7-deposit-from-spoke.md) |
 
-## Running integration tests
+### Redeem
 
-The tests require Foundry (forge + anvil) and the Solidity dependencies.
-
-### 1. Install Solidity dependencies
-
-```bash
-cd contracts
-git init
-git submodule update --init --recursive
-# or install manually:
-forge install foundry-rs/forge-std
-forge install openzeppelin/openzeppelin-contracts
-forge install openzeppelin/openzeppelin-contracts-upgradeable
-forge install vectorized/solady
-forge install LayerZero-Labs/LayerZero-v2
-forge install layerzero-labs/devtools
-forge install uniswap/v2-periphery
-forge install GNSPS/solidity-bytes-utils
-```
-
-### 2. Run all tests
-
-```bash
-bash tests/run.sh
-```
-
-This will:
-1. Start Anvil
-2. Build and deploy all contracts
-3. Run all 4 TypeScript test suites (43 tests)
-4. Stop Anvil
-
-## Flows reference
-
-### Deposit flows
-
-| ID | Function | When to use | Chain | Txs | Result |
-|----|----------|-------------|-------|-----|--------|
-| D1 | `depositSimple` | User is on the hub chain (Flow EVM). Oracle accounting is ON or vault is local. Standard ERC-4626. | Hub | approve + deposit | Shares minted immediately |
-| D2 | `depositMultiAsset` | User wants to deposit multiple tokens in one call. Hub only. | Hub | approve × N + deposit | Shares minted immediately |
-| D3 | `depositCrossChainOracleOn` | Hub vault has cross-chain positions but oracle is ON — totalAssets resolves synchronously. Same UX as D1. | Hub | approve + deposit | Shares minted immediately |
-| D4 | `depositAsync` | Oracle is OFF. Hub cannot resolve totalAssets synchronously. Uses ERC-7540 async flow. | Hub | approve + requestDeposit | Shares arrive after a LayerZero Read round-trip (~1-5 min) |
-| D5 | `mintAsync` | Same as D4 but user specifies exact shares to mint instead of assets to deposit. | Hub | approve + requestMint | Shares arrive after LZ Read round-trip |
-| D6 | `depositFromSpoke` | User is on a spoke chain (e.g. Arbitrum, Base). Oracle is ON. | Spoke | approve + OFT.send | Shares arrive on spoke after LZ delivery (~1-5 min) |
-| D7 | `depositFromSpoke` | User is on a spoke chain. Oracle is OFF. Same function as D6 — composer handles the difference. | Spoke | approve + OFT.send | Shares arrive on spoke after 2 LZ messages (~5-10 min) |
-
-### Redeem flows
-
-| ID | Function | When to use | Chain | Txs | Result |
-|----|----------|-------------|-------|-----|--------|
-| R1 | `redeemShares` | Standard ERC-4626 redeem. Vault has enough liquid assets. | Hub | approve + redeem | Assets transferred immediately |
-| R2 | `withdrawAssets` | User specifies exact asset amount to withdraw instead of shares to burn. | Hub | approve + withdraw | Assets transferred immediately |
-| R3 | `requestRedeem` | Vault uses async redeem (ERC-7540). No timelock configured. | Hub | approve + requestRedeem | Must call `redeemAsync` after fulfillment |
-| R4 | `requestRedeem` | Same as R3 but vault has a withdrawal timelock. Must wait before finalizing. | Hub | approve + requestRedeem | Must wait timelock period, then call `redeemAsync` |
-| R5 | `redeemAsync` | Finalize a previously submitted async redeem request (R3/R4) after it is fulfilled. | Hub | redeemAsync | Assets transferred |
+| ID | Function | When to use | Doc |
+|----|----------|-------------|-----|
+| R1 | `redeemShares` | Standard ERC-4626 redeem, hub chain | [R1](./docs/flows/R1-redeem-shares.md) |
+| R2 | `withdrawAssets` | Specify exact asset amount instead of shares | [R2](./docs/flows/R2-withdraw-assets.md) |
+| R3 | `requestRedeem` | Withdrawal queue, no timelock | [R3/R4](./docs/flows/R3-R4-request-redeem.md) |
+| R4 | `requestRedeem` | Withdrawal queue + timelock | [R3/R4](./docs/flows/R3-R4-request-redeem.md) |
+| R5 | `redeemAsync` | Hub with oracle OFF — async LZ Read flow | [R5](./docs/flows/R5-redeem-async.md) |
+| R6 | `bridgeSharesToHub` | Bridge shares from spoke to hub (step 1 of spoke redeem) | [R6](./docs/flows/R6-bridge-shares-to-hub.md) |
 
 ### User helpers (read-only)
 
-| Function | Description |
-|----------|-------------|
-| `getUserPosition` | Returns user shares, share value in assets, and underlying asset address |
-| `previewDeposit` | Simulates how many shares a given asset amount would mint |
-| `previewRedeem` | Simulates how many assets a given share amount would return |
-| `canDeposit` | Returns whether a user can deposit and the reason if blocked (cap, whitelist, paused) |
-| `getVaultMetadata` | Returns vault name, symbol, decimals, asset, capacity, and current mode |
-| `getAsyncRequestStatusLabel` | Human-readable label for an async request state (pending / fulfilled / finalized / refunded) |
+Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
+
+| Function | Returns |
+|----------|---------|
+| `getUserPosition` | shares, estimatedAssets, sharePrice, pendingWithdrawal |
+| `previewDeposit` | estimated shares for a given asset amount |
+| `previewRedeem` | estimated assets for a given share amount |
+| `canDeposit` | `{ allowed, reason }` — paused / cap / whitelist check |
+| `getVaultMetadata` | name, symbol, decimals, underlying, TVL, capacity, mode |
+| `getVaultStatus` | full config snapshot + `recommendedDepositFlow` / `recommendedRedeemFlow` |
+| `quoteLzFee` | LZ Read fee for async flows (D4, D5, R5) |
+| `getAsyncRequestStatusLabel` | pending / fulfilled / finalized / refunded |
+
+## Repo structure
+
+```
+more-vaults-sdk/
+├── src/
+│   ├── viem/     ← viem/wagmi SDK
+│   └── ethers/   ← ethers.js v6 SDK
+├── docs/
+│   ├── flows/    ← one .md per flow with code examples
+│   ├── user-helpers.md
+│   └── testing.md
+├── tests/        ← integration tests (require Foundry + Anvil)
+└── contracts/    ← protocol Solidity source + mocks (for running tests)
+```
+
+## Integration tests
+
+See [docs/testing.md](./docs/testing.md) for full setup and run instructions.
+
+```bash
+bash tests/run.sh  # runs all 43 tests
+```
