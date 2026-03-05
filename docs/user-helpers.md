@@ -2,7 +2,7 @@
 
 Read-only functions for reading vault state and user positions. All functions are pure reads — no transactions, no gas, no approvals. Safe to call at any time.
 
-Available in both `src/viem/index.js` and `src/ethers/index.js`.
+Available via `@oydual31/more-vaults-sdk/viem` and `@oydual31/more-vaults-sdk/ethers`.
 
 ---
 
@@ -40,7 +40,7 @@ interface UserPosition {
 
 ```ts
 // From test-user-helpers.ts — passes on mainnet-equivalent Anvil deployment
-import { getUserPosition } from '../../src/viem/index.js'
+import { getUserPosition } from '@oydual31/more-vaults-sdk/viem'
 
 const pos = await getUserPosition(publicClient, VAULT, userAccount.address)
 
@@ -54,11 +54,11 @@ console.log('Pending:', pos.pendingWithdrawal) // null or { shares, timelockEnds
 
 ```tsx
 import { useReadContracts } from 'wagmi'
-import { VAULT_ABI, CONFIG_ABI } from '../../src/viem/abis.js'
+import { VAULT_ABI, CONFIG_ABI } from '@oydual31/more-vaults-sdk/viem'
 
 // Or just call getUserPosition directly in a useEffect/useMemo with viem publicClient
 import { usePublicClient } from 'wagmi'
-import { getUserPosition } from '../../src/viem/index.js'
+import { getUserPosition } from '@oydual31/more-vaults-sdk/viem'
 
 function PositionDisplay({ vault, user }) {
   const publicClient = usePublicClient()
@@ -86,7 +86,7 @@ function PositionDisplay({ vault, user }) {
 
 ```ts
 import { BrowserProvider } from 'ethers'
-import { getUserPosition } from '../../src/ethers/index.js'
+import { getUserPosition } from '@oydual31/more-vaults-sdk/ethers'
 
 const provider = new BrowserProvider(window.ethereum)
 const pos = await getUserPosition(provider, VAULT_ADDRESS, userAddress)
@@ -107,7 +107,7 @@ previewDeposit(publicClient: PublicClient, vault: Address, assets: bigint): Prom
 ### Usage — from working test
 
 ```ts
-import { previewDeposit } from '../../src/viem/index.js'
+import { previewDeposit } from '@oydual31/more-vaults-sdk/viem'
 import { parseUnits } from 'viem'
 
 // How many shares would I get for 50 USDC?
@@ -119,7 +119,7 @@ const estimatedShares = await previewDeposit(publicClient, VAULT, parseUnits('50
 
 ```tsx
 import { useReadContract } from 'wagmi'
-import { VAULT_ABI } from '../../src/viem/abis.js'
+import { VAULT_ABI } from '@oydual31/more-vaults-sdk/viem'
 
 const { data: estimatedShares } = useReadContract({
   address: VAULT_ADDRESS,
@@ -145,7 +145,7 @@ previewRedeem(publicClient: PublicClient, vault: Address, shares: bigint): Promi
 ### Usage
 
 ```ts
-import { previewRedeem } from '../../src/viem/index.js'
+import { previewRedeem } from '@oydual31/more-vaults-sdk/viem'
 
 const estimatedAssets = await previewRedeem(publicClient, VAULT, userShares)
 ```
@@ -186,7 +186,7 @@ interface DepositEligibility {
 ### Usage — from working test
 
 ```ts
-import { canDeposit } from '../../src/viem/index.js'
+import { canDeposit } from '@oydual31/more-vaults-sdk/viem'
 
 // From test-user-helpers.ts — verified passing
 const eligibility = await canDeposit(publicClient, VAULT, userAccount.address)
@@ -203,7 +203,7 @@ if (!eligibility.allowed) {
 
 ```tsx
 import { usePublicClient } from 'wagmi'
-import { canDeposit } from '../../src/viem/index.js'
+import { canDeposit } from '@oydual31/more-vaults-sdk/viem'
 
 function DepositGate({ vault, user, children }) {
   const publicClient = usePublicClient()
@@ -253,7 +253,7 @@ interface VaultMetadata {
 ### Usage — from working test
 
 ```ts
-import { getVaultMetadata } from '../../src/viem/index.js'
+import { getVaultMetadata } from '@oydual31/more-vaults-sdk/viem'
 
 // From test-user-helpers.ts — verified passing
 const meta = await getVaultMetadata(publicClient, VAULT)
@@ -271,7 +271,7 @@ console.log(meta.isPaused)          // false
 
 ```tsx
 import { usePublicClient } from 'wagmi'
-import { getVaultMetadata } from '../../src/viem/index.js'
+import { getVaultMetadata } from '@oydual31/more-vaults-sdk/viem'
 
 function VaultHeader({ vault }) {
   const publicClient = usePublicClient()
@@ -326,7 +326,7 @@ interface AsyncRequestStatusInfo {
 ### Usage
 
 ```ts
-import { getAsyncRequestStatusLabel } from '../../src/viem/index.js'
+import { getAsyncRequestStatusLabel } from '@oydual31/more-vaults-sdk/viem'
 
 // After depositAsync or redeemAsync
 const info = await getAsyncRequestStatusLabel(publicClient, VAULT, guid)

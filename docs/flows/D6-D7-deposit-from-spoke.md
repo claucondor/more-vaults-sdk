@@ -79,7 +79,7 @@ const lzFee = nativeFee
 ### viem
 
 ```ts
-import { depositFromSpoke } from '../../src/viem/index.js'
+import { depositFromSpoke } from '@oydual31/more-vaults-sdk/viem'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 import { arbitrum } from 'viem/chains'
 
@@ -112,7 +112,7 @@ const { txHash } = await depositFromSpoke(
 ### ethers.js
 
 ```ts
-import { depositFromSpoke } from '../../src/ethers/index.js'
+import { depositFromSpoke } from '@oydual31/more-vaults-sdk/ethers'
 import { JsonRpcProvider, Wallet, parseUnits } from 'ethers'
 
 const spokeProvider = new JsonRpcProvider(ARB_RPC)

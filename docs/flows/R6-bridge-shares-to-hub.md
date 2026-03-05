@@ -43,7 +43,7 @@ The frontend **must switch the user's chain** between steps. The two steps canno
 ### viem
 
 ```ts
-import { bridgeSharesToHub, redeemShares } from '../../src/viem/index.js'
+import { bridgeSharesToHub, redeemShares } from '@oydual31/more-vaults-sdk/viem'
 import { createWalletClient, createPublicClient, http } from 'viem'
 import { arbitrum, flowMainnet } from 'viem/chains'
 
@@ -141,7 +141,7 @@ function SpokeRedeemFlow({ shares, lzFee }) {
 
 ```ts
 import { BrowserProvider } from 'ethers'
-import { bridgeSharesToHub, redeemShares } from '../../src/ethers/index.js'
+import { bridgeSharesToHub, redeemShares } from '@oydual31/more-vaults-sdk/ethers'
 
 // Step 1 — user on Arbitrum
 await window.ethereum.request({

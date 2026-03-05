@@ -50,7 +50,7 @@ Call `getWithdrawalRequest(publicClient, vault, owner)` to check if there's an a
 ### viem
 
 ```ts
-import { redeemShares, getUserPosition } from '../../src/viem/index.js'
+import { redeemShares, getUserPosition } from '@oydual31/more-vaults-sdk/viem'
 
 // Get current share balance
 const position = await getUserPosition(publicClient, VAULT_ADDRESS, account.address)
@@ -70,7 +70,7 @@ console.log('Assets received:', assets)
 ### ethers.js
 
 ```ts
-import { redeemShares } from '../../src/ethers/index.js'
+import { redeemShares } from '@oydual31/more-vaults-sdk/ethers'
 
 const { txHash, assets } = await redeemShares(
   signer,

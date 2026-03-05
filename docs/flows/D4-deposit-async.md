@@ -80,7 +80,7 @@ const { fulfilled, finalized, result } = await getAsyncRequestStatus(publicClien
 ### viem
 
 ```ts
-import { depositAsync, quoteLzFee, getVaultStatus, getAsyncRequestStatus } from '../../src/viem/index.js'
+import { depositAsync, quoteLzFee, getVaultStatus, getAsyncRequestStatus } from '@oydual31/more-vaults-sdk/viem'
 
 const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
 const lzFee = await quoteLzFee(publicClient, VAULT_ADDRESS)
@@ -106,7 +106,7 @@ console.log('Shares minted:', status2.result)
 ### ethers.js
 
 ```ts
-import { depositAsync, quoteLzFee } from '../../src/ethers/index.js'
+import { depositAsync, quoteLzFee } from '@oydual31/more-vaults-sdk/ethers'
 
 const lzFee = await quoteLzFee(provider, VAULT_ADDRESS)
 

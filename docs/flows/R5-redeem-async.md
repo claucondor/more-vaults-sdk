@@ -81,7 +81,7 @@ import {
   quoteLzFee,
   getAsyncRequestStatus,
   getVaultStatus,
-} from '../../src/viem/index.js'
+} from '@oydual31/more-vaults-sdk/viem'
 import { parseUnits } from 'viem'
 
 // 1. Deposit first to get shares
@@ -120,9 +120,9 @@ console.log('Assets received:', status.result)
 
 ```tsx
 import { useWriteContract, useReadContract, useAccount } from 'wagmi'
-import { BRIDGE_ABI, VAULT_ABI } from '../../src/viem/abis.js'
+import { BRIDGE_ABI, VAULT_ABI } from '@oydual31/more-vaults-sdk/viem'
 import { encodeAbiParameters, parseUnits } from 'viem'
-import { ActionType } from '../../src/viem/types.js'
+import { ActionType } from '@oydual31/more-vaults-sdk/viem'
 
 function AsyncRedeemButton({ vault, escrow, shares, lzFee }) {
   const { address } = useAccount()
@@ -165,7 +165,7 @@ function AsyncRedeemButton({ vault, escrow, shares, lzFee }) {
 
 ```ts
 import { BrowserProvider } from 'ethers'
-import { redeemAsync, quoteLzFee } from '../../src/ethers/index.js'
+import { redeemAsync, quoteLzFee } from '@oydual31/more-vaults-sdk/ethers'
 
 const provider = new BrowserProvider(window.ethereum)
 const signer = await provider.getSigner()
@@ -186,7 +186,7 @@ const { txHash, guid } = await redeemAsync(
 
 ```ts
 import { JsonRpcProvider, Wallet } from 'ethers'
-import { redeemAsync, quoteLzFee } from '../../src/ethers/index.js'
+import { redeemAsync, quoteLzFee } from '@oydual31/more-vaults-sdk/ethers'
 
 const provider = new JsonRpcProvider(RPC_URL)
 const signer = new Wallet(PRIVATE_KEY, provider)

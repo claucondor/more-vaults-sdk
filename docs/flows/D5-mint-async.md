@@ -56,7 +56,7 @@ User                    Hub Vault              LayerZero              Keeper
 ### viem
 
 ```ts
-import { mintAsync, quoteLzFee, previewDeposit } from '../../src/viem/index.js'
+import { mintAsync, quoteLzFee, previewDeposit } from '@oydual31/more-vaults-sdk/viem'
 
 // Get a rough maxAssets estimate from previewDeposit then add slippage
 const expectedAssets = await previewDeposit(publicClient, VAULT_ADDRESS, TARGET_SHARES)
@@ -78,7 +78,7 @@ const { txHash, guid } = await mintAsync(
 ### ethers.js
 
 ```ts
-import { mintAsync, quoteLzFee } from '../../src/ethers/index.js'
+import { mintAsync, quoteLzFee } from '@oydual31/more-vaults-sdk/ethers'
 
 const lzFee = await quoteLzFee(provider, VAULT_ADDRESS)
 

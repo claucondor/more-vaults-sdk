@@ -1,6 +1,18 @@
-# @more-vaults/sdk
+# @oydual31/more-vaults-sdk
 
 TypeScript SDK for the MoreVaults protocol. Supports **viem/wagmi** and **ethers.js v6**.
+
+```bash
+npm install @oydual31/more-vaults-sdk
+```
+
+```ts
+// viem / wagmi
+import { getVaultStatus, smartDeposit, getUserBalances } from '@oydual31/more-vaults-sdk/viem'
+
+// ethers.js v6
+import { getVaultStatus, smartDeposit, getUserBalances } from '@oydual31/more-vaults-sdk/ethers'
+```
 
 ---
 
@@ -176,7 +188,7 @@ Read-only helpers (`getUserPosition`, `previewDeposit`, etc.) accept a bare `Pro
 ### viem / wagmi
 
 ```ts
-import { getVaultStatus, depositSimple, getUserPosition } from './src/viem/index.js'
+import { getVaultStatus, depositSimple, getUserPosition } from '@oydual31/more-vaults-sdk/viem'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 
 const publicClient = createPublicClient({ chain: flowEvm, transport: http(RPC_URL) })
@@ -206,7 +218,7 @@ console.log('Value:', position.estimatedAssets)
 ### ethers.js
 
 ```ts
-import { getVaultStatus, depositSimple, getUserPosition } from './src/ethers/index.js'
+import { getVaultStatus, depositSimple, getUserPosition } from '@oydual31/more-vaults-sdk/ethers'
 import { BrowserProvider, parseUnits } from 'ethers'
 
 const provider = new BrowserProvider(window.ethereum)

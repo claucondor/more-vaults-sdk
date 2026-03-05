@@ -59,7 +59,7 @@ User                     Vault
 ## Checking timelock status
 
 ```ts
-import { getWithdrawalRequest } from '../../src/viem/index.js'
+import { getWithdrawalRequest } from '@oydual31/more-vaults-sdk/viem'
 
 const request = await getWithdrawalRequest(publicClient, VAULT_ADDRESS, account.address)
 
@@ -79,7 +79,7 @@ if (request === null) {
 ### viem (script / Node.js)
 
 ```ts
-import { requestRedeem, getWithdrawalRequest, redeemShares } from '../../src/viem/index.js'
+import { requestRedeem, getWithdrawalRequest, redeemShares } from '@oydual31/more-vaults-sdk/viem'
 
 // Step 1: queue
 const { txHash } = await requestRedeem(
@@ -112,7 +112,7 @@ const { txHash: redeemHash, assets } = await redeemShares(
 
 ```tsx
 import { useWriteContract, useReadContract, useAccount } from 'wagmi'
-import { VAULT_ABI } from '../../src/viem/abis.js'
+import { VAULT_ABI } from '@oydual31/more-vaults-sdk/viem'
 
 function WithdrawPanel() {
   const { address } = useAccount()
@@ -164,7 +164,7 @@ function WithdrawPanel() {
 
 ```ts
 import { BrowserProvider } from 'ethers'
-import { requestRedeem, redeemShares } from '../../src/ethers/index.js'
+import { requestRedeem, redeemShares } from '@oydual31/more-vaults-sdk/ethers'
 
 // Connect MetaMask
 const provider = new BrowserProvider(window.ethereum)

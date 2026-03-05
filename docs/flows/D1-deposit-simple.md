@@ -57,7 +57,7 @@ Shares are minted to `receiver` in the same transaction. No waiting.
 ### viem
 
 ```ts
-import { depositSimple, getVaultStatus } from '../../src/viem/index.js'
+import { depositSimple, getVaultStatus } from '@oydual31/more-vaults-sdk/viem'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { flowMainnet } from 'viem/chains'
@@ -82,7 +82,7 @@ console.log('Shares minted:', shares)
 ### ethers.js
 
 ```ts
-import { depositSimple } from '../../src/ethers/index.js'
+import { depositSimple } from '@oydual31/more-vaults-sdk/ethers'
 import { JsonRpcProvider, Wallet, parseUnits } from 'ethers'
 
 const provider = new JsonRpcProvider(RPC_URL)

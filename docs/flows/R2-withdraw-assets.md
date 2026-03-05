@@ -51,7 +51,7 @@ Both call the same ERC-4626 `withdraw` and `redeem` functions under the hood.
 ### viem
 
 ```ts
-import { withdrawAssets } from '../../src/viem/index.js'
+import { withdrawAssets } from '@oydual31/more-vaults-sdk/viem'
 import { parseUnits } from 'viem'
 
 // Withdraw exactly 100 USDC
@@ -68,7 +68,7 @@ const { txHash, assets } = await withdrawAssets(
 ### ethers.js
 
 ```ts
-import { withdrawAssets } from '../../src/ethers/index.js'
+import { withdrawAssets } from '@oydual31/more-vaults-sdk/ethers'
 import { parseUnits } from 'ethers'
 
 const { txHash } = await withdrawAssets(

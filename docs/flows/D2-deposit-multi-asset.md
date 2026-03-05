@@ -49,7 +49,7 @@ Shares are minted to `receiver` in the same transaction. No waiting.
 ### viem
 
 ```ts
-import { depositMultiAsset } from '../../src/viem/index.js'
+import { depositMultiAsset } from '@oydual31/more-vaults-sdk/viem'
 import { parseUnits } from 'viem'
 
 const USDC  = '0x...'
@@ -69,7 +69,7 @@ const { txHash, shares } = await depositMultiAsset(
 ### ethers.js
 
 ```ts
-import { depositMultiAsset } from '../../src/ethers/index.js'
+import { depositMultiAsset } from '@oydual31/more-vaults-sdk/ethers'
 import { parseUnits } from 'ethers'
 
 const { txHash, shares } = await depositMultiAsset(

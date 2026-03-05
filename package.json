@@ -1,6 +1,6 @@
 {
-  "name": "@more-vaults/sdk",
-  "version": "0.1.0",
+  "name": "@oydual31/more-vaults-sdk",
+  "version": "0.1.1",
   "description": "TypeScript SDK for MoreVaults protocol — viem/wagmi and ethers.js",
   "type": "module",
   "exports": {
@@ -40,7 +40,11 @@
     "ethers": ">=6.0.0"
   },
   "peerDependenciesMeta": {
-    "viem": { "optional": true },
-    "ethers": { "optional": true }
+    "viem": {
+      "optional": true
+    },
+    "ethers": {
+      "optional": true
+    }
   }
 }

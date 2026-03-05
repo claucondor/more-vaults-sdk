@@ -29,7 +29,7 @@ Identical to D1. See [D1 — depositSimple](./D1-deposit-simple.md#what-happens-
 ### viem
 
 ```ts
-import { depositCrossChainOracleOn, getVaultStatus } from '../../src/viem/index.js'
+import { depositCrossChainOracleOn, getVaultStatus } from '@oydual31/more-vaults-sdk/viem'
 
 // Check oracle is ON before using this flow
 const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
@@ -49,7 +49,7 @@ const { txHash, shares } = await depositCrossChainOracleOn(
 ### ethers.js
 
 ```ts
-import { depositCrossChainOracleOn } from '../../src/ethers/index.js'
+import { depositCrossChainOracleOn } from '@oydual31/more-vaults-sdk/ethers'
 
 const { txHash, shares } = await depositCrossChainOracleOn(
   signer,
