@@ -1,6 +1,6 @@
 # R6 — bridgeSharesToHub
 
-Step 1 of 2 for redeeming from a spoke chain. Bridges vault shares from the spoke chain to the hub (Flow EVM) via LayerZero OFT. Once shares arrive on the hub, the user calls `redeemShares` (R1) or `redeemAsync` (R5) on the hub.
+Step 1 of 2 for redeeming from a spoke chain. Bridges vault shares from the spoke chain to the hub via LayerZero OFT. Once shares arrive on the hub, the user calls `redeemShares` (R1) or `redeemAsync` (R5) on the hub.
 
 ## When to use
 
@@ -10,7 +10,7 @@ Step 1 of 2 for redeeming from a spoke chain. Bridges vault shares from the spok
 ## Two-step flow
 
 ```
-Step 1: Spoke chain                    Step 2: Hub chain (Flow EVM)
+Step 1: Spoke chain                    Step 2: Hub chain
 ─────────────────────                  ─────────────────────────────
 bridgeSharesToHub()       →  (LZ)  →  redeemShares() or redeemAsync()
   approve shareOFT                       burns shares, sends assets
@@ -27,7 +27,7 @@ The frontend **must switch the user's chain** between steps. The two steps canno
 | `walletClient` | `WalletClient` | Wallet client on the **spoke** chain |
 | `publicClient` | `PublicClient` | Public client on the **spoke** chain |
 | `shareOFT` | `Address` | OFTAdapter address for vault shares on the spoke chain |
-| `hubChainEid` | `number` | LayerZero EID for Flow EVM = **30332** |
+| `hubChainEid` | `number` | LayerZero EID for the hub chain (e.g. Flow EVM = **30332**) |
 | `shares` | `bigint` | Amount of vault shares to bridge |
 | `receiver` | `Address` | Address that will receive shares on the hub chain |
 | `lzFee` | `bigint` | OFT send fee — quote via `OFT.quoteSend()` on spoke chain |

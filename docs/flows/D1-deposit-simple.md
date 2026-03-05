@@ -1,10 +1,10 @@
 # D1 — depositSimple
 
-Standard ERC-4626 deposit for users on the hub chain (Flow EVM) when accounting resolves synchronously.
+Standard ERC-4626 deposit for users on the hub chain when accounting resolves synchronously.
 
 ## When to use
 
-- The user is on the **same chain as the vault** (Flow EVM)
+- The user is on the **same chain as the vault** (the hub chain)
 - The vault is a **single-chain vault** (not a hub), or
 - The vault is a hub with **oracle accounting ON** (`oraclesCrossChainAccounting = true`)
 

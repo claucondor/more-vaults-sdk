@@ -1,6 +1,6 @@
 # D6 / D7 — depositFromSpoke
 
-Deposit from a spoke chain (e.g. Arbitrum, Base, Ethereum) into the hub vault on Flow EVM via LayerZero OFT Compose. The user never leaves their native chain — tokens are bridged and deposited atomically from the hub's perspective.
+Deposit from a spoke chain (e.g. Arbitrum, Base, Ethereum) into the hub vault via LayerZero OFT Compose. The user never leaves their native chain — tokens are bridged and deposited atomically from the hub's perspective.
 
 ## D6 vs D7
 
@@ -17,7 +17,7 @@ The difference is handled server-side by the hub's MoreVaultsComposer contract. 
 ## What happens on-chain
 
 ```
-Spoke chain                         LayerZero                Hub (Flow EVM)
+Spoke chain                         LayerZero                Hub chain
      |                                  |                          |
      |-- approve(spokeOFT, amount) ---->|                          |
      |-- OFT.send(sendParam, fee) ----->|                          |
@@ -30,7 +30,7 @@ Spoke chain                         LayerZero                Hub (Flow EVM)
 ```
 
 1. **Approve spokeOFT**: underlying tokens are approved to the OFT contract on the spoke chain.
-2. **OFT.send()**: sends tokens to the hub chain with a `composeMsg` attached. The composeMsg encodes `(vault, receiver, minSharesOut)`.
+2. **OFT.send()**: sends tokens to the hub chain with a `composeMsg` attached. The composeMsg encodes `abi.encode(SendParam hopSendParam, uint256 minMsgValue)` — `hopSendParam` tells the hub where to send shares back.
 3. **Hub composer** (automatic): receives tokens + composeMsg, calls `vault.deposit()` (D6) or `vault.initDeposit()` (D7).
 4. **Shares bridged back** (D6): after minting, the hub sends shares back to the receiver on the spoke chain via OFT.
 
@@ -56,14 +56,15 @@ const lzFee = nativeFee
 | `walletClient` | `WalletClient` | Wallet client on the **spoke** chain |
 | `publicClient` | `PublicClient` | Public client on the **spoke** chain |
 | `spokeOFT` | `Address` | OFT contract for the underlying token on the spoke chain (e.g. USDC OFT on Arbitrum) |
-| `hubEid` | `number` | LayerZero Endpoint ID for Flow EVM = **30332** |
-| `hubVault` | `Address` | Hub vault address on Flow EVM |
+| `hubEid` | `number` | LayerZero Endpoint ID for the hub chain (Flow EVM = **30332**) |
+| `spokeEid` | `number` | LayerZero Endpoint ID for the spoke chain — where shares are sent back (Arbitrum = **30110**, Base = **30184**) |
 | `amount` | `bigint` | Token amount in spoke-chain decimals |
-| `receiver` | `Address` | Address that receives shares (on spoke chain for D6, hub for D7) |
-| `lzFee` | `bigint` | Native fee from `OFT.quoteSend()` |
-| `composeMsg` | `0x${string}` | Optional: pre-encoded `abi.encode(address vault, address receiver, uint256 minSharesOut)`. Built automatically if omitted. |
+| `receiver` | `Address` | Address that receives shares on the spoke chain |
+| `lzFee` | `bigint` | Native fee from `OFT.quoteSend()`. Must cover both the hub-bound message AND the return (shares back) message. |
+| `minMsgValue` | `bigint` | Optional: minimum ETH the hub composer must receive to process the compose and send shares back. Default `0n`. |
+| `minSharesOut` | `bigint` | Optional: minimum vault shares to receive (slippage protection on deposit). Default `0n`. |
 | `minAmountLD` | `bigint` | Optional: minimum tokens received on hub after bridge slippage. Defaults to `amount` (zero bridge slippage tolerance). |
-| `extraOptions` | `0x${string}` | Optional: LZ extra options. Default `'0x'`. |
+| `extraOptions` | `0x${string}` | Optional: LZ extra options for the hub-bound message. Default `'0x'`. |
 
 ## Returns
 
@@ -86,22 +87,23 @@ import { arbitrum } from 'viem/chains'
 const spokePublic = createPublicClient({ chain: arbitrum, transport: http(ARB_RPC) })
 const spokeWallet = createWalletClient({ account, chain: arbitrum, transport: http(ARB_RPC) })
 
-const FLOW_EVM_EID = 30332
+const HUB_EID   = 30332  // Flow EVM
+const SPOKE_EID = 30110  // Arbitrum
 const USDC_OFT_ARBITRUM = '0x...' // USDC OFT on Arbitrum
-const HUB_VAULT = '0x...'         // Vault on Flow EVM
 
-// Quote LZ fee first (call OFT.quoteSend on spoke)
+// Quote LZ fee first (call OFT.quoteSend on spoke with compose enabled)
 const lzFee = ... // from OFT.quoteSend()
 
 const { txHash } = await depositFromSpoke(
   spokeWallet,
   spokePublic,
   USDC_OFT_ARBITRUM,
-  FLOW_EVM_EID,
-  HUB_VAULT,
+  HUB_EID,
+  SPOKE_EID,
   parseUnits('100', 6),
   account.address,
   lzFee,
+  // minMsgValue, minSharesOut, minAmountLD, extraOptions — all optional
 )
 
 // Shares arrive on spoke chain after LayerZero delivery (~1-5 min for D6)
@@ -116,11 +118,11 @@ import { JsonRpcProvider, Wallet, parseUnits } from 'ethers'
 const spokeProvider = new JsonRpcProvider(ARB_RPC)
 const spokeSigner = new Wallet(PRIVATE_KEY, spokeProvider)
 
-const { txHash } = await depositFromSpoke(
+const { receipt } = await depositFromSpoke(
   spokeSigner,
   USDC_OFT_ARBITRUM,
-  30332,
-  HUB_VAULT,
+  30332,  // hubEid (Flow EVM)
+  30110,  // spokeEid (Arbitrum)
   parseUnits('100', 6),
   spokeSigner.address,
   lzFee,
@@ -130,8 +132,8 @@ const { txHash } = await depositFromSpoke(
 ## Important notes
 
 - **Clients must be on the spoke chain**, not the hub chain.
-- The `receiver` gets shares on the **spoke chain** (for D6 with oracle ON). For D7 (oracle OFF), shares may arrive on the hub — check your vault's oracle configuration.
-- Bridge slippage is separate from vault slippage. `minAmountLD` controls bridge slippage; `minSharesOut` (in composeMsg) controls vault slippage.
+- The `receiver` gets shares on the **spoke chain** (identified by `spokeEid`). Shares are bridged back automatically by the hub composer after the deposit.
+- Bridge slippage is separate from vault slippage. `minAmountLD` controls bridge slippage; `minSharesOut` controls vault slippage (mapped to `hopSendParam.minAmountLD` in the composeMsg).
 - If the hub-side composer call fails (e.g. vault paused), the tokens may be stuck in the escrow. Contact the vault admin.
 
 ## See also

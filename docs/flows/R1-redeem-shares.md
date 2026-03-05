@@ -4,7 +4,7 @@ Standard ERC-4626 redemption. Burns vault shares and returns the proportional am
 
 ## When to use
 
-- User is on the **hub chain** (Flow EVM)
+- User is on the **hub chain**
 - Vault has sufficient **liquid assets** to cover the redemption
 - No withdrawal queue required (or queue has already been fulfilled and timelock expired)
 - `status.recommendedRedeemFlow === 'redeemShares'`

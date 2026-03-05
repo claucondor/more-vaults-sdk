@@ -4,9 +4,9 @@ Cross-chain hub deposit when oracle accounting is enabled. This is an **alias fo
 
 ## When to use
 
-- The vault is a **hub** on Flow EVM with cross-chain positions (funds deployed to other chains)
+- The vault is a **hub** with cross-chain positions (funds deployed to other chains)
 - `oraclesCrossChainAccounting = true` — the vault reads cross-chain balances via oracle feeds synchronously
-- The user is on the **hub chain** (Flow EVM)
+- The user is on the **hub chain**
 
 When oracle accounting is ON, `totalAssets()` is resolved in the same block by querying a configured oracle feed that aggregates the cross-chain positions. From the user's perspective, this is indistinguishable from a local vault.
 

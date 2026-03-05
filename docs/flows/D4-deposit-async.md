@@ -4,7 +4,7 @@ Async deposit for cross-chain hub vaults when oracle accounting is **OFF**. The 
 
 ## When to use
 
-- The vault is a **hub** on Flow EVM
+- The vault is a **hub** (cross-chain vault)
 - `oraclesCrossChainAccounting = false`
 - `status.recommendedDepositFlow === 'depositAsync'`
 

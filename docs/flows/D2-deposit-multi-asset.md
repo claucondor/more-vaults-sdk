@@ -6,7 +6,7 @@ Deposit multiple ERC-20 tokens into the vault in a single vault call. The vault 
 
 - The user holds multiple tokens and wants to deposit them all in one operation
 - The vault must be configured to accept those tokens (`isAssetAvailable(token) = true`)
-- Hub chain only — user must be on Flow EVM
+- Hub chain only — user must be on the same chain as the vault
 
 ## What happens on-chain
 

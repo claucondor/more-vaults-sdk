@@ -21,36 +21,52 @@ async function ensureAllowance(
 }
 
 // ---------------------------------------------------------------------------
-// D6 -- Spoke -> Hub OFT Compose (oracle ON, sync)
+// D6 / D7 — Spoke → Hub, OFT Compose deposit
 // ---------------------------------------------------------------------------
 
 /**
- * Deposit from a spoke chain to the hub vault via OFT compose message.
+ * D6 / D7 — Deposit from a spoke chain to the hub vault via OFT Compose.
  *
- * The underlying tokens are bridged through a LayerZero OFT and a compose
- * message triggers the deposit on the hub chain. Shares arrive back on the
- * spoke chain automatically via LZ callback.
+ * Bridges tokens from the spoke chain to the hub via LayerZero OFT, attaching a
+ * composeMsg that instructs the hub-side MoreVaultsComposer to deposit into the vault
+ * and send the resulting shares back to the receiver on the spoke chain.
+ *
+ * - **D6 (oracle ON)**: composer calls `_depositAndSend` — shares arrive on spoke in ~1 LZ round-trip.
+ * - **D7 (oracle OFF)**: composer calls `_initDeposit` — requires an additional LZ Read round-trip.
+ *
+ * From the user's perspective, both D6 and D7 have the same interface.
  *
  * TXs: 1 approve (if needed) + 1 OFT.send().
  * Wait: LayerZero cross-chain delivery (typically 1-5 minutes).
  *
- * @param signer     - Wallet on the spoke chain.
- * @param spokeOFT   - OFT/OFTAdapter address on the spoke chain.
- * @param hubVault   - Hub vault (diamond) address on the hub chain.
- * @param amount     - Amount of underlying tokens to bridge and deposit.
- * @param receiver   - Address that will receive shares (on spoke chain).
- * @param lzFee      - Native fee for LayerZero message (use quoteSend).
- * @param dstEid     - LayerZero endpoint ID for the hub chain (e.g. 30332 for Flow EVM).
+ * @param signer        - Wallet on the spoke chain.
+ * @param spokeOFT      - OFT/OFTAdapter address on the spoke chain.
+ * @param hubEid        - LayerZero EID for the hub chain (e.g. 30332 for Flow EVM).
+ * @param spokeEid      - LayerZero EID for the spoke chain — where shares are sent back.
+ * @param amount        - Amount of underlying tokens to bridge and deposit.
+ * @param receiver      - Address that will receive shares on the spoke chain.
+ * @param lzFee         - Native fee for the OFT.send() call. Must cover both hub-bound
+ *                        and return (shares back) messages. Quote via OFT.quoteSend().
+ * @param minMsgValue   - Minimum msg.value the hub composer must receive to process
+ *                        the compose and send shares back. Defaults to 0.
+ * @param minSharesOut  - Minimum shares to receive after deposit (slippage protection).
+ *                        Defaults to 0.
+ * @param minAmountLD   - Minimum tokens received on hub after bridge. Defaults to `amount`.
+ * @param extraOptions  - LZ extra options bytes for the hub-bound message.
  * @returns Transaction receipt.
  */
 export async function depositFromSpoke(
   signer: Signer,
   spokeOFT: string,
-  hubVault: string,
+  hubEid: number,
+  spokeEid: number,
   amount: bigint,
   receiver: string,
   lzFee: bigint,
-  dstEid: number = 30332
+  minMsgValue: bigint = 0n,
+  minSharesOut: bigint = 0n,
+  minAmountLD?: bigint,
+  extraOptions: string = "0x",
 ): Promise<{ receipt: ContractTransactionReceipt }> {
   await ensureAllowance(signer, spokeOFT, spokeOFT, amount);
 
@@ -58,21 +74,37 @@ export async function depositFromSpoke(
   const refundAddress = await signer.getAddress();
 
   // Pad receiver to bytes32 for LZ
-  const toBytes32 = zeroPadValue(receiver, 32);
+  const receiverBytes32 = zeroPadValue(receiver, 32);
 
-  // Build composeMsg: abi.encode(hubVault, receiver)
+  // Build hopSendParam: tells the hub composer where to send shares back.
+  // dstEid = spoke chain, receiver = shares recipient, amountLD = 0 (overwritten by composer).
+  const hopSendParam = {
+    dstEid: spokeEid,
+    to: receiverBytes32,
+    amountLD: 0n,
+    minAmountLD: minSharesOut,
+    extraOptions: "0x",
+    composeMsg: "0x",
+    oftCmd: "0x",
+  };
+
+  // composeMsg = abi.encode(SendParam hopSendParam, uint256 minMsgValue)
+  // This is what MoreVaultsComposer.handleCompose() decodes.
   const coder = AbiCoder.defaultAbiCoder();
   const composeMsg = coder.encode(
-    ["address", "address"],
-    [hubVault, receiver]
+    [
+      "tuple(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd)",
+      "uint256",
+    ],
+    [hopSendParam, minMsgValue],
   );
 
   const sendParam = {
-    dstEid,
-    to: toBytes32,
+    dstEid: hubEid,
+    to: receiverBytes32,
     amountLD: amount,
-    minAmountLD: (amount * 99n) / 100n, // 1% slippage tolerance
-    extraOptions: "0x",
+    minAmountLD: minAmountLD ?? amount,
+    extraOptions,
     composeMsg,
     oftCmd: "0x",
   };
@@ -92,11 +124,8 @@ export async function depositFromSpoke(
 // ---------------------------------------------------------------------------
 
 /**
- * Deposit from a spoke chain when cross-chain oracle is OFF.
- * Same UX as D6 -- the async resolution is transparent to the user.
- * The compose message triggers an async request on the hub side.
- *
- * TXs: 1 approve (if needed) + 1 OFT.send().
- * Wait: LayerZero delivery + async cross-chain fulfillment.
+ * Alias: D7 — Spoke to hub deposit when oracle is OFF (async resolution).
+ * Same interface as D6; the difference is handled server-side by the composer contract.
+ * Shares may take longer to arrive due to the additional LZ Read round-trip.
  */
 export const depositFromSpokeAsync = depositFromSpoke;

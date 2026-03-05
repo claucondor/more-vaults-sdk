@@ -32,7 +32,7 @@ Redeem 100 shares →  receive 105 USDC
 
 MoreVaults uses a **hub-and-spoke** model for cross-chain yield:
 
-- **Hub** (`isHub = true`): the main vault on **Flow EVM**. Holds accounting, mints/burns shares, accepts deposits and redemptions. All SDK flows target the hub.
+- **Hub** (`isHub = true`): the chain where the vault does its accounting — mints/burns shares, accepts deposits and redemptions. All SDK flows target the hub. Flow EVM is the current reference deployment, but any EVM chain can be the hub.
 - **Spoke**: a position on another chain (Arbitrum, Base, etc.) where the vault has deployed funds for yield. Users on spoke chains bridge tokens to the hub via LayerZero OFT — they never interact with the spoke contracts directly.
 
 If a vault has `isHub = false`, it is a single-chain vault — no cross-chain flows apply, use D1/R1.
@@ -150,7 +150,7 @@ const { data: walletClient } = useWalletClient()
 
 Read-only helpers (`getUserPosition`, `previewDeposit`, etc.) accept a bare `Provider` in the ethers version — no signer needed.
 
-> The client's chain must match the chain where the vault lives. Hub flows → Flow EVM. Spoke deposit/redeem (D6/D7/R6) → the spoke chain.
+> The client's chain must match the chain where the vault lives. Hub flows → the hub chain. Spoke deposit/redeem (D6/D7/R6) → the spoke chain.
 
 ---
 
@@ -213,7 +213,7 @@ const { txHash, shares } = await depositSimple(
 
 | ID | Function | When to use | Doc |
 |----|----------|-------------|-----|
-| D1 | `depositSimple` | User on hub (Flow EVM), oracle ON or local vault | [→](./docs/flows/D1-deposit-simple.md) |
+| D1 | `depositSimple` | User on hub chain, oracle ON or local vault | [→](./docs/flows/D1-deposit-simple.md) |
 | D2 | `depositMultiAsset` | Deposit multiple tokens in one call | [→](./docs/flows/D2-deposit-multi-asset.md) |
 | D3 | `depositCrossChainOracleOn` | Alias for D1 — hub with oracle ON, explicit naming | [→](./docs/flows/D3-deposit-oracle-on.md) |
 | D4 | `depositAsync` | Hub with oracle OFF — async LZ Read, shares arrive in ~1–5 min | [→](./docs/flows/D4-deposit-async.md) |
