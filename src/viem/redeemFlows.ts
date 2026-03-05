@@ -16,6 +16,7 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
+import { MissingEscrowAddressError } from './errors'
 
 /**
  * R1 — Simple share redemption (ERC-4626 standard).
@@ -227,6 +228,7 @@ export async function redeemAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+  if (!addresses.escrow) throw new MissingEscrowAddressError()
   const escrow = getAddress(addresses.escrow)
 
   // Pre-flight: validate async cross-chain setup before sending any transaction

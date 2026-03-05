@@ -133,3 +133,88 @@ export async function depositFromSpoke(
  * Shares may take longer to arrive due to the additional LZ Read round-trip.
  */
 export { depositFromSpoke as depositFromSpokeAsync }
+
+/**
+ * Quote the LayerZero fee required for depositFromSpoke / depositFromSpokeAsync.
+ *
+ * The fee must cover TWO LZ hops: spoke→hub (deposit) + hub→spoke (shares return).
+ * Pass the SAME parameters you intend to use for depositFromSpoke.
+ *
+ * @param publicClient   Public client on the SPOKE chain
+ * @param spokeOFT       OFT contract address on spoke chain
+ * @param hubEid         LayerZero EID for the hub chain
+ * @param spokeEid       LayerZero EID for the spoke chain
+ * @param amount         Amount of tokens to bridge
+ * @param receiver       Address that will receive vault shares on the spoke chain
+ * @param minMsgValue    Same value you plan to pass to depositFromSpoke (default 0n)
+ * @param minSharesOut   Same value you plan to pass to depositFromSpoke (default 0n)
+ * @param minAmountLD    Same value you plan to pass to depositFromSpoke (default amount)
+ * @param extraOptions   Same value you plan to pass to depositFromSpoke (default 0x)
+ * @returns              Native fee in wei to pass as lzFee to depositFromSpoke
+ */
+export async function quoteDepositFromSpokeFee(
+  publicClient: PublicClient,
+  spokeOFT: Address,
+  hubEid: number,
+  spokeEid: number,
+  amount: bigint,
+  receiver: Address,
+  minMsgValue: bigint = 0n,
+  minSharesOut: bigint = 0n,
+  minAmountLD?: bigint,
+  extraOptions: `0x${string}` = '0x',
+): Promise<bigint> {
+  const oft = getAddress(spokeOFT)
+  const receiverBytes32 = pad(getAddress(receiver), { size: 32 })
+
+  // Build hopSendParam — same as in depositFromSpoke
+  const hopSendParam = {
+    dstEid: spokeEid,
+    to: receiverBytes32,
+    amountLD: 0n,
+    minAmountLD: minSharesOut,
+    extraOptions: '0x' as `0x${string}`,
+    composeMsg: '0x' as `0x${string}`,
+    oftCmd: '0x' as `0x${string}`,
+  }
+
+  // Build composeMsg — same encoding as depositFromSpoke
+  const composeMsgBytes = encodeAbiParameters(
+    [
+      {
+        type: 'tuple',
+        name: 'hopSendParam',
+        components: [
+          { type: 'uint32', name: 'dstEid' },
+          { type: 'bytes32', name: 'to' },
+          { type: 'uint256', name: 'amountLD' },
+          { type: 'uint256', name: 'minAmountLD' },
+          { type: 'bytes', name: 'extraOptions' },
+          { type: 'bytes', name: 'composeMsg' },
+          { type: 'bytes', name: 'oftCmd' },
+        ],
+      },
+      { type: 'uint256', name: 'minMsgValue' },
+    ],
+    [hopSendParam, minMsgValue],
+  )
+
+  const sendParam = {
+    dstEid: hubEid,
+    to: receiverBytes32,
+    amountLD: amount,
+    minAmountLD: minAmountLD ?? amount,
+    extraOptions,
+    composeMsg: composeMsgBytes,
+    oftCmd: '0x' as `0x${string}`,
+  }
+
+  const fee = await publicClient.readContract({
+    address: oft,
+    abi: OFT_ABI,
+    functionName: 'quoteSend',
+    args: [sendParam, false],
+  })
+
+  return (fee as { nativeFee: bigint; lzTokenFee: bigint }).nativeFee
+}

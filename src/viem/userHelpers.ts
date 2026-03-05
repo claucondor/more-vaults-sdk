@@ -1,6 +1,8 @@
 import { type Address, type PublicClient, getAddress } from 'viem'
-import { BRIDGE_ABI, CONFIG_ABI, VAULT_ABI, METADATA_ABI } from './abis'
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
+import { getVaultStatus } from './utils'
+import type { VaultStatus } from './utils'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -37,15 +39,21 @@ export async function getUserPosition(
   const v = getAddress(vault)
   const u = getAddress(user)
 
-  // First batch: balance, decimals, withdrawal request (all independent)
-  const [shares, decimals, withdrawalRequest, block] = await Promise.all([
-    publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'balanceOf', args: [u] }),
-    publicClient.readContract({ address: v, abi: METADATA_ABI, functionName: 'decimals' }),
-    publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'getWithdrawalRequest', args: [u] }),
-    publicClient.getBlock(),
-  ])
+  // First batch: balance, decimals, withdrawal request — via multicall
+  const [sharesResult, decimalsResult, withdrawalRequestResult] = await publicClient.multicall({
+    contracts: [
+      { address: v, abi: VAULT_ABI, functionName: 'balanceOf', args: [u] },
+      { address: v, abi: METADATA_ABI, functionName: 'decimals' },
+      { address: v, abi: VAULT_ABI, functionName: 'getWithdrawalRequest', args: [u] },
+    ],
+    allowFailure: false,
+  })
+  const block = await publicClient.getBlock()
+  const shares = sharesResult
+  const decimals = decimalsResult
+  const withdrawalRequest = withdrawalRequestResult
 
-  const [withdrawShares, timelockEndsAt] = withdrawalRequest as [bigint, bigint]
+  const [withdrawShares, timelockEndsAt] = withdrawalRequest as unknown as [bigint, bigint]
 
   // Second batch: convertToAssets calls (need shares and decimals from first batch)
   const oneShare = 10n ** BigInt(decimals)
@@ -146,16 +154,31 @@ export async function canDeposit(
 ): Promise<DepositEligibility> {
   const v = getAddress(vault)
 
-  const [isPaused, maxDepositAmount] = await Promise.all([
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'paused' }),
-    publicClient.readContract({ address: v, abi: CONFIG_ABI, functionName: 'maxDeposit', args: [getAddress(user)] }),
-  ])
+  const isPaused = await publicClient.readContract({
+    address: v,
+    abi: CONFIG_ABI,
+    functionName: 'paused',
+  })
 
   if (isPaused) {
     return { allowed: false, reason: 'paused' }
   }
+
+  // maxDeposit(user) can REVERT on vaults with whitelist/ACL
+  let maxDepositAmount: bigint
+  try {
+    maxDepositAmount = await publicClient.readContract({
+      address: v,
+      abi: CONFIG_ABI,
+      functionName: 'maxDeposit',
+      args: [getAddress(user)],
+    })
+  } catch {
+    // Revert means the vault has whitelist/ACL and this user is not approved
+    return { allowed: false, reason: 'not-whitelisted' }
+  }
+
   if (maxDepositAmount === 0n) {
-    // maxDeposit returns 0 both when capacity is full and when user is not whitelisted
     return { allowed: false, reason: 'capacity-full' }
   }
   return { allowed: true, reason: 'ok' }
@@ -185,20 +208,30 @@ export async function getVaultMetadata(
 ): Promise<VaultMetadata> {
   const v = getAddress(vault)
 
-  // First batch: vault metadata (all independent)
-  const [name, symbol, decimals, underlying] = await Promise.all([
-    publicClient.readContract({ address: v, abi: METADATA_ABI, functionName: 'name' }),
-    publicClient.readContract({ address: v, abi: METADATA_ABI, functionName: 'symbol' }),
-    publicClient.readContract({ address: v, abi: METADATA_ABI, functionName: 'decimals' }),
-    publicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'asset' }),
-  ])
+  // Batch 1: vault name, symbol, decimals, underlying — 1 eth_call via multicall
+  const b1 = await publicClient.multicall({
+    contracts: [
+      { address: v, abi: METADATA_ABI, functionName: 'name' },
+      { address: v, abi: METADATA_ABI, functionName: 'symbol' },
+      { address: v, abi: METADATA_ABI, functionName: 'decimals' },
+      { address: v, abi: VAULT_ABI,    functionName: 'asset' },
+    ] as const,
+    allowFailure: false,
+  })
 
-  // Second batch: underlying token metadata (needs underlying address)
-  const underlyingAddr = getAddress(underlying)
-  const [underlyingSymbol, underlyingDecimals] = await Promise.all([
-    publicClient.readContract({ address: underlyingAddr, abi: METADATA_ABI, functionName: 'symbol' }),
-    publicClient.readContract({ address: underlyingAddr, abi: METADATA_ABI, functionName: 'decimals' }),
-  ])
+  const [name, symbol, decimals, underlying] = b1
+  const underlyingAddr = getAddress(underlying as Address)
+
+  // Batch 2: underlying symbol + decimals — 1 eth_call via multicall
+  const b2 = await publicClient.multicall({
+    contracts: [
+      { address: underlyingAddr, abi: METADATA_ABI, functionName: 'symbol' },
+      { address: underlyingAddr, abi: METADATA_ABI, functionName: 'decimals' },
+    ] as const,
+    allowFailure: false,
+  })
+
+  const [underlyingSymbol, underlyingDecimals] = b2
 
   return {
     name,
@@ -278,4 +311,179 @@ export async function getAsyncRequestStatusLabel(
     label: 'Waiting for cross-chain oracle response...',
     result: 0n,
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface UserBalances {
+  /** Vault shares the user holds */
+  shareBalance: bigint
+  /** Underlying token balance in wallet (for deposit input) */
+  underlyingBalance: bigint
+  /** convertToAssets(shareBalance) — vault position value */
+  estimatedAssets: bigint
+}
+
+/**
+ * Read the user's token balances relevant to a vault.
+ *
+ * @param publicClient  Public client for reads
+ * @param vault         Vault address
+ * @param user          User wallet address
+ * @returns             Share balance, underlying wallet balance, and estimated assets
+ */
+export async function getUserBalances(
+  publicClient: PublicClient,
+  vault: Address,
+  user: Address,
+): Promise<UserBalances> {
+  const v = getAddress(vault)
+  const u = getAddress(user)
+
+  // Batch 1: get underlying address, share balance, decimals
+  const [shareBalance, , underlying] = await publicClient.multicall({
+    contracts: [
+      { address: v, abi: VAULT_ABI,   functionName: 'balanceOf', args: [u] },
+      { address: v, abi: METADATA_ABI, functionName: 'decimals' },
+      { address: v, abi: VAULT_ABI,   functionName: 'asset' },
+    ],
+    allowFailure: false,
+  })
+
+  const underlyingAddr = getAddress(underlying)
+
+  // Batch 2: underlying balance + estimated assets (skip convertToAssets if no shares)
+  const [underlyingBalance, estimatedAssets] = await Promise.all([
+    publicClient.readContract({
+      address: underlyingAddr,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [u],
+    }),
+    shareBalance === 0n
+      ? Promise.resolve(0n)
+      : publicClient.readContract({
+          address: v,
+          abi: VAULT_ABI,
+          functionName: 'convertToAssets',
+          args: [shareBalance],
+        }),
+  ])
+
+  return {
+    shareBalance,
+    underlyingBalance,
+    estimatedAssets,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MaxWithdrawable {
+  /** How many shares can be redeemed right now */
+  shares: bigint
+  /** How many underlying assets that corresponds to */
+  assets: bigint
+}
+
+/**
+ * Calculate the maximum amount a user can withdraw from a vault right now.
+ *
+ * For hub vaults without oracle accounting, this is limited by hub liquidity.
+ * For local and oracle vaults, all assets are immediately redeemable.
+ *
+ * @param publicClient  Public client for reads
+ * @param vault         Vault address
+ * @param user          User wallet address
+ * @returns             Maximum withdrawable shares and assets
+ */
+export async function getMaxWithdrawable(
+  publicClient: PublicClient,
+  vault: Address,
+  user: Address,
+): Promise<MaxWithdrawable> {
+  const v = getAddress(vault)
+  const u = getAddress(user)
+
+  // Batch 1: isHub, oraclesCrossChainAccounting, user share balance, underlying address
+  const [isHub, oraclesEnabled, userShares, underlying] = await publicClient.multicall({
+    contracts: [
+      { address: v, abi: CONFIG_ABI, functionName: 'isHub' },
+      { address: v, abi: BRIDGE_ABI, functionName: 'oraclesCrossChainAccounting' },
+      { address: v, abi: VAULT_ABI,  functionName: 'balanceOf', args: [u] },
+      { address: v, abi: VAULT_ABI,  functionName: 'asset' },
+    ],
+    allowFailure: false,
+  })
+
+  if (userShares === 0n) {
+    return { shares: 0n, assets: 0n }
+  }
+
+  const underlyingAddr = getAddress(underlying)
+
+  // Batch 2: estimated assets for user shares + hub liquid balance
+  const [estimatedAssets, hubLiquidBalance] = await Promise.all([
+    publicClient.readContract({
+      address: v,
+      abi: VAULT_ABI,
+      functionName: 'convertToAssets',
+      args: [userShares],
+    }),
+    publicClient.readContract({
+      address: underlyingAddr,
+      abi: ERC20_ABI,
+      functionName: 'balanceOf',
+      args: [v],
+    }),
+  ])
+
+  let maxAssets: bigint
+  if (isHub && !oraclesEnabled) {
+    // Hub vault: limited by hub liquidity
+    maxAssets = estimatedAssets < hubLiquidBalance ? estimatedAssets : hubLiquidBalance
+  } else {
+    // Local or oracle vault: all assets redeemable
+    maxAssets = estimatedAssets
+  }
+
+  // Convert back to shares if limited by hub liquidity
+  let maxShares: bigint
+  if (maxAssets < estimatedAssets) {
+    maxShares = await publicClient.readContract({
+      address: v,
+      abi: VAULT_ABI,
+      functionName: 'convertToShares',
+      args: [maxAssets],
+    })
+  } else {
+    maxShares = userShares
+  }
+
+  return {
+    shares: maxShares,
+    assets: maxAssets,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type VaultSummary = VaultStatus & VaultMetadata
+
+/**
+ * Get a combined snapshot of vault status and metadata in one call.
+ *
+ * @param publicClient  Public client for reads
+ * @param vault         Vault address
+ * @returns             Merged VaultStatus and VaultMetadata
+ */
+export async function getVaultSummary(
+  publicClient: PublicClient,
+  vault: Address,
+): Promise<VaultSummary> {
+  const [status, metadata] = await Promise.all([
+    getVaultStatus(publicClient, vault),
+    getVaultMetadata(publicClient, vault),
+  ])
+  return { ...status, ...metadata }
 }

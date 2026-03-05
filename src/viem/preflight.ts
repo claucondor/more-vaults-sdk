@@ -170,19 +170,22 @@ export async function preflightSync(
 ): Promise<void> {
   const v = getAddress(vault)
 
-  // Parallel read: paused + maxDeposit (zero address is acceptable for cap check)
-  const [isPaused, depositCap] = await Promise.all([
+  // Run paused and maxDeposit in parallel.
+  // maxDeposit(address(0)) may REVERT on whitelisted vaults — catch separately.
+  const [isPaused, depositCapResult] = await Promise.all([
     publicClient.readContract({
       address: v,
       abi: CONFIG_ABI,
       functionName: 'paused',
     }),
-    publicClient.readContract({
-      address: v,
-      abi: CONFIG_ABI,
-      functionName: 'maxDeposit',
-      args: [zeroAddress],
-    }),
+    publicClient
+      .readContract({
+        address: v,
+        abi: CONFIG_ABI,
+        functionName: 'maxDeposit',
+        args: [zeroAddress],
+      })
+      .catch(() => null as null),
   ])
 
   if (isPaused) {
@@ -191,7 +194,9 @@ export async function preflightSync(
     )
   }
 
-  if (depositCap === 0n) {
+  // null means maxDeposit reverted → whitelist vault — skip capacity check
+  // (the user may still be whitelisted; canDeposit will do user-specific check)
+  if (depositCapResult !== null && depositCapResult === 0n) {
     throw new Error(
       `[MoreVaults] Vault ${vault} has reached deposit capacity. No more deposits accepted.`,
     )

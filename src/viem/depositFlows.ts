@@ -12,8 +12,9 @@ import type {
   AsyncRequestResult,
 } from './types'
 import { ActionType } from './types'
-import { ensureAllowance } from './utils'
+import { ensureAllowance, getVaultStatus, quoteLzFee } from './utils'
 import { preflightSync, preflightAsync } from './preflight'
+import { MissingEscrowAddressError, VaultPausedError, CapacityFullError } from './errors'
 
 /**
  * D1 / D3 — Simple deposit (ERC-4626 standard).
@@ -165,6 +166,7 @@ export async function depositAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+  if (!addresses.escrow) throw new MissingEscrowAddressError()
   const escrow = getAddress(addresses.escrow)
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
@@ -239,6 +241,7 @@ export async function mintAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+  if (!addresses.escrow) throw new MissingEscrowAddressError()
   const escrow = getAddress(addresses.escrow)
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
@@ -280,4 +283,49 @@ export async function mintAsync(
   })
 
   return { txHash, guid: guid as `0x${string}` }
+}
+
+/**
+ * Smart deposit — auto-selects the correct flow based on vault configuration.
+ *
+ * Calls getVaultStatus internally to determine the vault mode, then dispatches
+ * to the appropriate flow:
+ * - local / cross-chain-oracle → depositSimple
+ * - cross-chain-async → depositAsync (quotes LZ fee automatically)
+ *
+ * @param walletClient   Wallet client with account attached
+ * @param publicClient   Public client for reads
+ * @param addresses      Vault address set (`escrow` required for async vaults)
+ * @param assets         Amount of underlying to deposit
+ * @param receiver       Address that will receive shares
+ * @param extraOptions   Optional LZ extra options (only used for async vaults)
+ * @returns              DepositResult or AsyncRequestResult depending on vault mode
+ * @throws               VaultPausedError if vault is paused
+ * @throws               CapacityFullError if vault is full
+ */
+export async function smartDeposit(
+  walletClient: WalletClient,
+  publicClient: PublicClient,
+  addresses: VaultAddresses,
+  assets: bigint,
+  receiver: Address,
+  extraOptions: `0x${string}` = '0x',
+): Promise<DepositResult | AsyncRequestResult> {
+  const vault = getAddress(addresses.vault)
+  const status = await getVaultStatus(publicClient, vault)
+
+  if (status.mode === 'paused') {
+    throw new VaultPausedError(vault)
+  }
+  if (status.mode === 'full') {
+    throw new CapacityFullError(vault)
+  }
+
+  if (status.recommendedDepositFlow === 'depositAsync') {
+    const lzFee = await quoteLzFee(publicClient, vault, extraOptions)
+    return depositAsync(walletClient, publicClient, addresses, assets, receiver, lzFee, extraOptions)
+  }
+
+  // local or cross-chain-oracle
+  return depositSimple(walletClient, publicClient, addresses, assets, receiver)
 }

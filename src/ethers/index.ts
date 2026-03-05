@@ -25,6 +25,19 @@ export {
   METADATA_ABI,
 } from "./abis";
 
+// --- Errors ---
+export {
+  MoreVaultsError,
+  VaultPausedError,
+  CapacityFullError,
+  NotWhitelistedError,
+  InsufficientLiquidityError,
+  CCManagerNotConfiguredError,
+  EscrowNotConfiguredError,
+  NotHubVaultError,
+  MissingEscrowAddressError,
+} from "./errors";
+
 // --- Deposit flows ---
 export {
   depositSimple,
@@ -32,10 +45,15 @@ export {
   depositCrossChainOracleOn,
   depositAsync,
   mintAsync,
+  smartDeposit,
 } from "./depositFlows";
 
 // --- Cross-chain flows ---
-export { depositFromSpoke, depositFromSpokeAsync } from "./crossChainFlows";
+export {
+  depositFromSpoke,
+  depositFromSpokeAsync,
+  quoteDepositFromSpokeFee,
+} from "./crossChainFlows";
 
 // --- Redeem flows ---
 export {
@@ -58,7 +76,7 @@ export {
 export type { VaultStatus, VaultMode } from "./utils";
 
 // --- Pre-flight validation ---
-export { preflightSync, preflightAsync } from "./preflight";
+export { preflightSync, preflightAsync, preflightRedeemLiquidity } from "./preflight";
 
 // --- User Helpers ---
 export {
@@ -68,6 +86,9 @@ export {
   canDeposit,
   getVaultMetadata,
   getAsyncRequestStatusLabel,
+  getUserBalances,
+  getMaxWithdrawable,
+  getVaultSummary,
 } from "./userHelpers";
 export type {
   UserPosition,
@@ -76,4 +97,7 @@ export type {
   VaultMetadata,
   AsyncRequestStatus,
   AsyncRequestStatusInfo,
+  UserBalances,
+  MaxWithdrawable,
+  VaultSummary,
 } from "./userHelpers";

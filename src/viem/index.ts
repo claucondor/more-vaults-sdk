@@ -22,6 +22,19 @@ export type {
 } from './types'
 export { ActionType } from './types'
 
+// --- Errors ---
+export {
+  MoreVaultsError,
+  VaultPausedError,
+  CapacityFullError,
+  NotWhitelistedError,
+  InsufficientLiquidityError,
+  CCManagerNotConfiguredError,
+  EscrowNotConfiguredError,
+  NotHubVaultError,
+  MissingEscrowAddressError,
+} from './errors'
+
 // --- Deposit Flows ---
 export {
   depositSimple,
@@ -29,12 +42,14 @@ export {
   depositMultiAsset,
   depositAsync,
   mintAsync,
+  smartDeposit,
 } from './depositFlows'
 
 // --- Cross-Chain Flows ---
 export {
   depositFromSpoke,
   depositFromSpokeAsync,
+  quoteDepositFromSpokeFee,
 } from './crossChainFlows'
 
 // --- Redeem Flows ---
@@ -58,7 +73,7 @@ export {
 export type { VaultStatus, VaultMode } from './utils'
 
 // --- Pre-flight validation ---
-export { preflightSync, preflightAsync } from './preflight'
+export { preflightSync, preflightAsync, preflightRedeemLiquidity } from './preflight'
 
 // --- User Helpers ---
 export {
@@ -68,6 +83,9 @@ export {
   canDeposit,
   getVaultMetadata,
   getAsyncRequestStatusLabel,
+  getUserBalances,
+  getMaxWithdrawable,
+  getVaultSummary,
 } from './userHelpers'
 export type {
   UserPosition,
@@ -76,4 +94,7 @@ export type {
   VaultMetadata,
   AsyncRequestStatus,
   AsyncRequestStatusInfo,
+  UserBalances,
+  MaxWithdrawable,
+  VaultSummary,
 } from './userHelpers'

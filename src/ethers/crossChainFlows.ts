@@ -1,4 +1,4 @@
-import { Contract, AbiCoder, zeroPadValue, Signer } from "ethers";
+import { Contract, AbiCoder, zeroPadValue, Signer, Provider } from "ethers";
 import { ERC20_ABI, OFT_ABI } from "./abis";
 import type { ContractTransactionReceipt } from "ethers";
 
@@ -129,3 +129,78 @@ export async function depositFromSpoke(
  * Shares may take longer to arrive due to the additional LZ Read round-trip.
  */
 export const depositFromSpokeAsync = depositFromSpoke;
+
+// ---------------------------------------------------------------------------
+// Fee quote helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Quote the LayerZero fee required for depositFromSpoke / depositFromSpokeAsync.
+ *
+ * @param provider       Read-only provider on the SPOKE chain
+ * @param spokeOFT       OFT contract address on spoke chain
+ * @param hubEid         LayerZero EID for the hub chain
+ * @param spokeEid       LayerZero EID for the spoke chain
+ * @param amount         Amount of tokens to bridge
+ * @param receiver       Address that will receive vault shares on the spoke chain
+ * @param minMsgValue    Same value you plan to pass to depositFromSpoke (default 0n)
+ * @param minSharesOut   Same value you plan to pass to depositFromSpoke (default 0n)
+ * @param minAmountLD    Minimum tokens on hub after bridge (default: amount)
+ * @param extraOptions   LZ extra options (default 0x)
+ * @returns              Native fee in wei to pass as lzFee to depositFromSpoke
+ */
+export async function quoteDepositFromSpokeFee(
+  provider: Provider,
+  spokeOFT: string,
+  hubEid: number,
+  spokeEid: number,
+  amount: bigint,
+  receiver: string,
+  minMsgValue: bigint = 0n,
+  minSharesOut: bigint = 0n,
+  minAmountLD?: bigint,
+  extraOptions: string = "0x"
+): Promise<bigint> {
+  const receiverBytes32 = zeroPadValue(receiver, 32);
+
+  const hopSendParam = {
+    dstEid: spokeEid,
+    to: receiverBytes32,
+    amountLD: 0n,
+    minAmountLD: minSharesOut,
+    extraOptions: "0x",
+    composeMsg: "0x",
+    oftCmd: "0x",
+  };
+
+  const coder = AbiCoder.defaultAbiCoder();
+  const composeMsgBytes = coder.encode(
+    ["tuple(uint32,bytes32,uint256,uint256,bytes,bytes,bytes)", "uint256"],
+    [
+      [
+        hopSendParam.dstEid,
+        hopSendParam.to,
+        hopSendParam.amountLD,
+        hopSendParam.minAmountLD,
+        hopSendParam.extraOptions,
+        hopSendParam.composeMsg,
+        hopSendParam.oftCmd,
+      ],
+      minMsgValue,
+    ]
+  );
+
+  const sendParam = {
+    dstEid: hubEid,
+    to: receiverBytes32,
+    amountLD: amount,
+    minAmountLD: minAmountLD ?? amount,
+    extraOptions,
+    composeMsg: composeMsgBytes,
+    oftCmd: "0x",
+  };
+
+  const oft = new Contract(spokeOFT, OFT_ABI, provider);
+  const fee = await oft.quoteSend(sendParam, false);
+  return fee.nativeFee as bigint;
+}

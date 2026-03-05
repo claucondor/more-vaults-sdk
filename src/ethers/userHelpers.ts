@@ -4,10 +4,18 @@
  * All functions use Provider (read-only). None send transactions.
  */
 
-import { Contract } from "ethers";
+import { Contract, Interface } from "ethers";
 import type { Provider } from "ethers";
-import { BRIDGE_ABI, CONFIG_ABI, VAULT_ABI, METADATA_ABI } from "./abis";
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from "./abis";
 import type { CrossChainRequestInfo } from "./types";
+import { getVaultStatus } from "./utils";
+import type { VaultStatus } from "./utils";
+
+// Multicall3 — deployed at the same address on every EVM chain
+const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
+const MULTICALL3_ABI = [
+  "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[] returnData)",
+] as const;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -41,20 +49,32 @@ export async function getUserPosition(
   vault: string,
   user: string
 ): Promise<UserPosition> {
-  const vaultContract = new Contract(vault, VAULT_ABI, provider);
-  const metadataContract = new Contract(vault, METADATA_ABI, provider);
+  const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+  const vaultIface    = new Interface(VAULT_ABI as unknown as string[]);
+  const decimalsIface = new Interface(["function decimals() view returns (uint8)"]);
 
-  // First batch: balance, decimals, withdrawal request (all independent)
-  const [shares, decimals, withdrawalRequest, block] = await Promise.all([
-    vaultContract.balanceOf(user) as Promise<bigint>,
-    metadataContract.decimals() as Promise<number>,
-    vaultContract.getWithdrawalRequest(user) as Promise<[bigint, bigint]>,
+  // First batch: balance, decimals, withdrawal request — via Multicall3
+  const b1Calls = [
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("balanceOf", [user]) },
+    { target: vault, allowFailure: false, callData: decimalsIface.encodeFunctionData("decimals") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("getWithdrawalRequest", [user]) },
+  ];
+
+  const [b1Raw, block] = await Promise.all([
+    mc.aggregate3.staticCall(b1Calls) as Promise<{ success: boolean; returnData: string }[]>,
     provider.getBlock("latest"),
   ]);
+
+  const shares           = vaultIface.decodeFunctionResult("balanceOf", b1Raw[0].returnData)[0] as bigint;
+  const decimalsRaw      = decimalsIface.decodeFunctionResult("decimals", b1Raw[1].returnData)[0];
+  const decimals         = Number(decimalsRaw);
+  const withdrawalResult = vaultIface.decodeFunctionResult("getWithdrawalRequest", b1Raw[2].returnData);
+  const withdrawalRequest: [bigint, bigint] = [withdrawalResult[0] as bigint, withdrawalResult[1] as bigint];
 
   const [withdrawShares, timelockEndsAt] = withdrawalRequest;
 
   // Second batch: convertToAssets calls (need shares and decimals from first batch)
+  const vaultContract = new Contract(vault, VAULT_ABI, provider);
   const oneShare = 10n ** BigInt(decimals);
   const [estimatedAssets, sharePrice] = await Promise.all([
     shares === 0n
@@ -150,16 +170,22 @@ export async function canDeposit(
 ): Promise<DepositEligibility> {
   const config = new Contract(vault, CONFIG_ABI, provider);
 
-  const [isPaused, maxDepositAmount] = await Promise.all([
-    config.paused() as Promise<boolean>,
-    config.maxDeposit(user) as Promise<bigint>,
-  ]);
+  const isPaused = await (config.paused() as Promise<boolean>);
 
   if (isPaused) {
     return { allowed: false, reason: "paused" };
   }
+
+  // maxDeposit(user) can REVERT on vaults with whitelist/ACL
+  let maxDepositAmount: bigint;
+  try {
+    maxDepositAmount = await (config.maxDeposit(user) as Promise<bigint>);
+  } catch {
+    // Revert means the vault has whitelist/ACL and this user is not approved
+    return { allowed: false, reason: "not-whitelisted" };
+  }
+
   if (maxDepositAmount === 0n) {
-    // maxDeposit returns 0 both when capacity is full and when user is not whitelisted
     return { allowed: false, reason: "capacity-full" };
   }
   return { allowed: true, reason: "ok" };
@@ -187,25 +213,37 @@ export async function getVaultMetadata(
   provider: Provider,
   vault: string
 ): Promise<VaultMetadata> {
-  const metadata = new Contract(vault, METADATA_ABI, provider);
-  const vaultContract = new Contract(vault, VAULT_ABI, provider);
+  const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
+  const MULTICALL3_ABI = [
+    "function aggregate3(tuple(address target, bool allowFailure, bytes callData)[] calls) payable returns (tuple(bool success, bytes returnData)[] returnData)",
+  ] as const;
+  const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+  const metaIface  = new Interface(METADATA_ABI as unknown as string[]);
+  const vaultIface = new Interface(VAULT_ABI as unknown as string[]);
 
-  // First batch: vault metadata (all independent)
-  const [name, symbol, rawDecimals, underlying] = await Promise.all([
-    metadata.name() as Promise<string>,
-    metadata.symbol() as Promise<string>,
-    metadata.decimals() as Promise<bigint>,
-    vaultContract.asset() as Promise<string>,
-  ]);
-  const decimals = Number(rawDecimals);
+  // Batch 1: name, symbol, decimals, asset — 1 eth_call via Multicall3
+  const b1Calls = [
+    { target: vault, allowFailure: false, callData: metaIface.encodeFunctionData("name") },
+    { target: vault, allowFailure: false, callData: metaIface.encodeFunctionData("symbol") },
+    { target: vault, allowFailure: false, callData: metaIface.encodeFunctionData("decimals") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("asset") },
+  ];
+  const b1: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b1Calls);
 
-  // Second batch: underlying token metadata (needs underlying address)
-  const underlyingMetadata = new Contract(underlying, METADATA_ABI, provider);
-  const [underlyingSymbol, rawUnderlyingDecimals] = await Promise.all([
-    underlyingMetadata.symbol() as Promise<string>,
-    underlyingMetadata.decimals() as Promise<bigint>,
-  ]);
-  const underlyingDecimals = Number(rawUnderlyingDecimals);
+  const name       = metaIface.decodeFunctionResult("name",     b1[0].returnData)[0] as string;
+  const symbol     = metaIface.decodeFunctionResult("symbol",   b1[1].returnData)[0] as string;
+  const decimals   = Number(metaIface.decodeFunctionResult("decimals", b1[2].returnData)[0]);
+  const underlying = vaultIface.decodeFunctionResult("asset",   b1[3].returnData)[0] as string;
+
+  // Batch 2: underlying symbol + decimals — 1 eth_call via Multicall3
+  const b2Calls = [
+    { target: underlying, allowFailure: false, callData: metaIface.encodeFunctionData("symbol") },
+    { target: underlying, allowFailure: false, callData: metaIface.encodeFunctionData("decimals") },
+  ];
+  const b2: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b2Calls);
+
+  const underlyingSymbol   = metaIface.decodeFunctionResult("symbol",   b2[0].returnData)[0] as string;
+  const underlyingDecimals = Number(metaIface.decodeFunctionResult("decimals", b2[1].returnData)[0]);
 
   return {
     name,
@@ -280,4 +318,163 @@ export async function getAsyncRequestStatusLabel(
     label: "Waiting for cross-chain oracle response...",
     result: 0n,
   };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface UserBalances {
+  /** Vault shares the user holds */
+  shareBalance: bigint;
+  /** Underlying token balance in wallet (for deposit input) */
+  underlyingBalance: bigint;
+  /** convertToAssets(shareBalance) — vault position value */
+  estimatedAssets: bigint;
+}
+
+/**
+ * Read the user's token balances relevant to a vault.
+ *
+ * @param provider  Read-only provider
+ * @param vault     Vault address
+ * @param user      User wallet address
+ * @returns         Share balance, underlying wallet balance, and estimated assets
+ */
+export async function getUserBalances(
+  provider: Provider,
+  vault: string,
+  user: string
+): Promise<UserBalances> {
+  const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+  const vaultIface    = new Interface(VAULT_ABI as unknown as string[]);
+  const decimalsIface = new Interface(["function decimals() view returns (uint8)"]);
+
+  // Batch 1: shareBalance, decimals, underlying address
+  const b1Calls = [
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("balanceOf", [user]) },
+    { target: vault, allowFailure: false, callData: decimalsIface.encodeFunctionData("decimals") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("asset") },
+  ];
+
+  const b1: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b1Calls);
+
+  const shareBalance = vaultIface.decodeFunctionResult("balanceOf", b1[0].returnData)[0] as bigint;
+  const underlying   = vaultIface.decodeFunctionResult("asset",     b1[2].returnData)[0] as string;
+
+  // Batch 2: underlying wallet balance + estimated assets (skip convertToAssets if no shares)
+  const [underlyingBalance, estimatedAssets] = await Promise.all([
+    (new Contract(underlying, ERC20_ABI, provider).balanceOf(user) as Promise<bigint>),
+    shareBalance === 0n
+      ? Promise.resolve(0n)
+      : (new Contract(vault, VAULT_ABI, provider).convertToAssets(shareBalance) as Promise<bigint>),
+  ]);
+
+  return {
+    shareBalance,
+    underlyingBalance,
+    estimatedAssets,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface MaxWithdrawable {
+  /** How many shares can be redeemed right now */
+  shares: bigint;
+  /** How many underlying assets that corresponds to */
+  assets: bigint;
+}
+
+/**
+ * Calculate the maximum amount a user can withdraw from a vault right now.
+ *
+ * For hub vaults without oracle accounting, this is limited by hub liquidity.
+ * For local and oracle vaults, all assets are immediately redeemable.
+ *
+ * @param provider  Read-only provider
+ * @param vault     Vault address
+ * @param user      User wallet address
+ * @returns         Maximum withdrawable shares and assets
+ */
+export async function getMaxWithdrawable(
+  provider: Provider,
+  vault: string,
+  user: string
+): Promise<MaxWithdrawable> {
+  const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
+  const configIface = new Interface(CONFIG_ABI as unknown as string[]);
+  const bridgeIface = new Interface(BRIDGE_ABI as unknown as string[]);
+  const vaultIface  = new Interface(VAULT_ABI as unknown as string[]);
+  const erc20Iface  = new Interface(ERC20_ABI as unknown as string[]);
+
+  // Batch 1: isHub, oraclesCrossChainAccounting, user share balance, underlying
+  const b1Calls = [
+    { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("isHub") },
+    { target: vault, allowFailure: false, callData: bridgeIface.encodeFunctionData("oraclesCrossChainAccounting") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("balanceOf", [user]) },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("asset") },
+  ];
+
+  const b1: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b1Calls);
+
+  const isHub        = configIface.decodeFunctionResult("isHub",                       b1[0].returnData)[0] as boolean;
+  const oraclesEnabled = bridgeIface.decodeFunctionResult("oraclesCrossChainAccounting", b1[1].returnData)[0] as boolean;
+  const userShares   = vaultIface.decodeFunctionResult("balanceOf", b1[2].returnData)[0] as bigint;
+  const underlying   = vaultIface.decodeFunctionResult("asset",     b1[3].returnData)[0] as string;
+
+  if (userShares === 0n) {
+    return { shares: 0n, assets: 0n };
+  }
+
+  // Batch 2: estimated assets + hub liquid balance
+  const b2Calls = [
+    { target: vault,      allowFailure: false, callData: vaultIface.encodeFunctionData("convertToAssets", [userShares]) },
+    { target: underlying, allowFailure: false, callData: erc20Iface.encodeFunctionData("balanceOf", [vault]) },
+  ];
+
+  const b2: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b2Calls);
+
+  const estimatedAssets  = vaultIface.decodeFunctionResult("convertToAssets", b2[0].returnData)[0] as bigint;
+  const hubLiquidBalance = erc20Iface.decodeFunctionResult("balanceOf",       b2[1].returnData)[0] as bigint;
+
+  let maxAssets: bigint;
+  if (isHub && !oraclesEnabled) {
+    maxAssets = estimatedAssets < hubLiquidBalance ? estimatedAssets : hubLiquidBalance;
+  } else {
+    maxAssets = estimatedAssets;
+  }
+
+  let maxShares: bigint;
+  if (maxAssets < estimatedAssets) {
+    const vaultContract = new Contract(vault, VAULT_ABI, provider);
+    maxShares = await (vaultContract.convertToShares(maxAssets) as Promise<bigint>);
+  } else {
+    maxShares = userShares;
+  }
+
+  return {
+    shares: maxShares,
+    assets: maxAssets,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type VaultSummary = VaultStatus & VaultMetadata;
+
+/**
+ * Get a combined snapshot of vault status and metadata in one call.
+ *
+ * @param provider  Read-only provider
+ * @param vault     Vault address
+ * @returns         Merged VaultStatus and VaultMetadata
+ */
+export async function getVaultSummary(
+  provider: Provider,
+  vault: string
+): Promise<VaultSummary> {
+  const [status, metadata] = await Promise.all([
+    getVaultStatus(provider, vault),
+    getVaultMetadata(provider, vault),
+  ]);
+  return { ...status, ...metadata };
 }

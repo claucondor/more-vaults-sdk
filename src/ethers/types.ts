@@ -5,7 +5,7 @@ export interface VaultAddresses {
   /** Hub vault (diamond proxy) address. */
   vault: string;
   /** MoreVaultsEscrow address for cross-chain locking. */
-  escrow: string;
+  escrow?: string;
   /** OFTAdapter address for share token bridging (cross-chain only). */
   shareOFT?: string;
   /** OFT address for USDC bridging (cross-chain only). */

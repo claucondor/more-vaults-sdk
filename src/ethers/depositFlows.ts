@@ -1,4 +1,5 @@
 import { Contract, AbiCoder, Signer } from "ethers";
+import type { Provider } from "ethers";
 import { VAULT_ABI, BRIDGE_ABI, ERC20_ABI } from "./abis";
 import {
   VaultAddresses,
@@ -7,6 +8,8 @@ import {
   ActionType,
 } from "./types";
 import { preflightAsync, preflightSync } from "./preflight";
+import { MissingEscrowAddressError, VaultPausedError, CapacityFullError } from "./errors";
+import { getVaultStatus, quoteLzFee } from "./utils";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -184,15 +187,17 @@ export async function depositAsync(
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
   const provider = signer.provider!;
+  if (!addresses.escrow) throw new MissingEscrowAddressError();
+  const escrow = addresses.escrow;
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
-  await preflightAsync(provider, addresses.vault, addresses.escrow);
+  await preflightAsync(provider, addresses.vault, escrow);
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
   const underlying: string = await vault.asset();
 
   // CRITICAL: approve ESCROW, not vault
-  await ensureAllowance(signer, underlying, addresses.escrow, assets);
+  await ensureAllowance(signer, underlying, escrow, assets);
 
   // Encode parameters only (no selector) — contracts use abi.decode on these bytes
   const coder = AbiCoder.defaultAbiCoder();
@@ -254,15 +259,17 @@ export async function mintAsync(
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
   const provider = signer.provider!;
+  if (!addresses.escrow) throw new MissingEscrowAddressError();
+  const escrow = addresses.escrow;
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
-  await preflightAsync(provider, addresses.vault, addresses.escrow);
+  await preflightAsync(provider, addresses.vault, escrow);
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
   const underlying: string = await vault.asset();
 
   // CRITICAL: approve ESCROW for maxAssets
-  await ensureAllowance(signer, underlying, addresses.escrow, maxAssets);
+  await ensureAllowance(signer, underlying, escrow, maxAssets);
 
   // Encode parameters only (no selector) — contracts use abi.decode on these bytes
   const coder = AbiCoder.defaultAbiCoder();
@@ -292,4 +299,49 @@ export async function mintAsync(
   const receipt = await tx.wait();
 
   return { receipt, guid };
+}
+
+/**
+ * Smart deposit — auto-selects the correct flow based on vault configuration.
+ *
+ * Calls getVaultStatus internally to determine the vault mode, then dispatches
+ * to the appropriate flow:
+ * - local / cross-chain-oracle → depositSimple
+ * - cross-chain-async → depositAsync (quotes LZ fee automatically)
+ *
+ * @param signer         Wallet signer with account attached
+ * @param provider       Read-only provider for on-chain reads
+ * @param addresses      Vault address set (`escrow` required for async vaults)
+ * @param assets         Amount of underlying to deposit
+ * @param receiver       Address that will receive shares
+ * @param extraOptions   Optional LZ extra options (only used for async vaults)
+ * @returns              DepositResult or AsyncRequestResult depending on vault mode
+ * @throws               VaultPausedError if vault is paused
+ * @throws               CapacityFullError if vault is full
+ */
+export async function smartDeposit(
+  signer: Signer,
+  provider: Provider,
+  addresses: VaultAddresses,
+  assets: bigint,
+  receiver: string,
+  extraOptions: string = "0x"
+): Promise<DepositResult | AsyncRequestResult> {
+  const vault = addresses.vault;
+  const status = await getVaultStatus(provider, vault);
+
+  if (status.mode === "paused") {
+    throw new VaultPausedError(vault);
+  }
+  if (status.mode === "full") {
+    throw new CapacityFullError(vault);
+  }
+
+  if (status.recommendedDepositFlow === "depositAsync") {
+    const lzFee = await quoteLzFee(provider, vault, extraOptions);
+    return depositAsync(signer, addresses, assets, receiver, lzFee, extraOptions);
+  }
+
+  // local or cross-chain-oracle
+  return depositSimple(signer, addresses, assets, receiver);
 }
