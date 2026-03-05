@@ -115,18 +115,37 @@ This will:
 3. Run all 4 TypeScript test suites (43 tests)
 4. Stop Anvil
 
-## Covered flows
+## Flows reference
 
-| ID | Flow | Library |
-|----|------|---------|
-| D1 | `depositSimple` — ERC-4626 deposit | viem + ethers |
-| D2 | `depositMultiAsset` — multi-asset deposit | viem + ethers |
-| D3 | `depositCrossChainOracleOn` — oracle ON hub deposit | viem + ethers |
-| D4 | `depositAsync` — async deposit (LZ callback sim) | viem + ethers |
-| D5 | `mintAsync` — async mint | viem + ethers |
-| D6/D7 | `depositFromSpoke` — spoke → hub via OFT | viem + ethers |
-| R1 | `redeemShares` — ERC-4626 redeem | viem + ethers |
-| R2 | `withdrawAssets` — withdraw by asset amount | viem + ethers |
-| R3 | `requestRedeem` — async redeem request | viem + ethers |
-| R4 | `requestRedeem` + timelock | viem + ethers |
-| R5 | `redeemAsync` — finalize async redeem | viem + ethers |
+### Deposit flows
+
+| ID | Function | When to use | Chain | Txs | Result |
+|----|----------|-------------|-------|-----|--------|
+| D1 | `depositSimple` | User is on the hub chain (Flow EVM). Oracle accounting is ON or vault is local. Standard ERC-4626. | Hub | approve + deposit | Shares minted immediately |
+| D2 | `depositMultiAsset` | User wants to deposit multiple tokens in one call. Hub only. | Hub | approve × N + deposit | Shares minted immediately |
+| D3 | `depositCrossChainOracleOn` | Hub vault has cross-chain positions but oracle is ON — totalAssets resolves synchronously. Same UX as D1. | Hub | approve + deposit | Shares minted immediately |
+| D4 | `depositAsync` | Oracle is OFF. Hub cannot resolve totalAssets synchronously. Uses ERC-7540 async flow. | Hub | approve + requestDeposit | Shares arrive after a LayerZero Read round-trip (~1-5 min) |
+| D5 | `mintAsync` | Same as D4 but user specifies exact shares to mint instead of assets to deposit. | Hub | approve + requestMint | Shares arrive after LZ Read round-trip |
+| D6 | `depositFromSpoke` | User is on a spoke chain (e.g. Arbitrum, Base). Oracle is ON. | Spoke | approve + OFT.send | Shares arrive on spoke after LZ delivery (~1-5 min) |
+| D7 | `depositFromSpoke` | User is on a spoke chain. Oracle is OFF. Same function as D6 — composer handles the difference. | Spoke | approve + OFT.send | Shares arrive on spoke after 2 LZ messages (~5-10 min) |
+
+### Redeem flows
+
+| ID | Function | When to use | Chain | Txs | Result |
+|----|----------|-------------|-------|-----|--------|
+| R1 | `redeemShares` | Standard ERC-4626 redeem. Vault has enough liquid assets. | Hub | approve + redeem | Assets transferred immediately |
+| R2 | `withdrawAssets` | User specifies exact asset amount to withdraw instead of shares to burn. | Hub | approve + withdraw | Assets transferred immediately |
+| R3 | `requestRedeem` | Vault uses async redeem (ERC-7540). No timelock configured. | Hub | approve + requestRedeem | Must call `redeemAsync` after fulfillment |
+| R4 | `requestRedeem` | Same as R3 but vault has a withdrawal timelock. Must wait before finalizing. | Hub | approve + requestRedeem | Must wait timelock period, then call `redeemAsync` |
+| R5 | `redeemAsync` | Finalize a previously submitted async redeem request (R3/R4) after it is fulfilled. | Hub | redeemAsync | Assets transferred |
+
+### User helpers (read-only)
+
+| Function | Description |
+|----------|-------------|
+| `getUserPosition` | Returns user shares, share value in assets, and underlying asset address |
+| `previewDeposit` | Simulates how many shares a given asset amount would mint |
+| `previewRedeem` | Simulates how many assets a given share amount would return |
+| `canDeposit` | Returns whether a user can deposit and the reason if blocked (cap, whitelist, paused) |
+| `getVaultMetadata` | Returns vault name, symbol, decimals, asset, capacity, and current mode |
+| `getAsyncRequestStatusLabel` | Human-readable label for an async request state (pending / fulfilled / finalized / refunded) |
