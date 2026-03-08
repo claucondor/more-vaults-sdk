@@ -79,3 +79,12 @@ export class MissingEscrowAddressError extends MoreVaultsError {
     this.name = 'MissingEscrowAddressError'
   }
 }
+
+export class WrongChainError extends MoreVaultsError {
+  constructor(currentChainId: number, expectedChainId: number) {
+    super(
+      `Wrong network: wallet is on chain ${currentChainId}, but the vault hub requires chain ${expectedChainId}. Switch networks before proceeding.`,
+    )
+    this.name = 'WrongChainError'
+  }
+}

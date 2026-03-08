@@ -17,6 +17,7 @@ import { ActionType } from './types'
 import { ensureAllowance } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
 import { MissingEscrowAddressError } from './errors'
+import { validateWalletChain } from './chainValidation'
 
 /**
  * R1 — Simple share redemption (ERC-4626 standard).
@@ -45,6 +46,9 @@ export async function redeemShares(
 ): Promise<RedeemResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
 
   const { result: assets } = await publicClient.simulateContract({
     address: vault,
@@ -94,6 +98,9 @@ export async function withdrawAssets(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
+
   const { result: sharesBurned } = await publicClient.simulateContract({
     address: vault,
     abi: VAULT_ABI,
@@ -142,6 +149,9 @@ export async function requestRedeem(
 ): Promise<{ txHash: Hash }> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
 
   await publicClient.simulateContract({
     address: vault,
@@ -230,6 +240,9 @@ export async function redeemAsync(
   const vault = getAddress(addresses.vault)
   if (!addresses.escrow) throw new MissingEscrowAddressError()
   const escrow = getAddress(addresses.escrow)
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(publicClient, vault, escrow)

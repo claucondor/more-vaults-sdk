@@ -175,10 +175,14 @@ export async function getVaultStatus(
 
   const spokesDeployedBalance = totalAssets > hubLiquidBalance ? totalAssets - hubLiquidBalance : 0n
 
-  // null = maxDeposit reverted → whitelist/ACL vault
+  // null = maxDeposit reverted.
+  // For cross-chain-async hubs this is expected — the contract reverts with
+  // NotAnERC4626CompatibleVault because maxDeposit is not meaningful in async mode.
+  // Only treat the revert as "whitelist/ACL" when the vault is NOT a hub.
   const MAX_UINT256 = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff')
-  const depositAccessRestricted = maxDepositRaw === null
-  const effectiveCapacity: bigint = depositAccessRestricted ? MAX_UINT256 : maxDepositRaw
+  const isCrossChainAsync = isHub && !oraclesEnabled
+  const depositAccessRestricted = maxDepositRaw === null && !isCrossChainAsync
+  const effectiveCapacity: bigint = (maxDepositRaw === null) ? MAX_UINT256 : maxDepositRaw
 
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode

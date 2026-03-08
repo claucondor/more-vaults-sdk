@@ -9,6 +9,12 @@ export interface VaultAddresses {
   shareOFT?: Address
   /** OFT for USDC bridging (cross-chain deposits from spoke) */
   usdcOFT?: Address
+  /**
+   * Expected EVM chain ID of the hub. When provided, SDK functions will
+   * throw a clear WrongChainError if the walletClient is on a different chain.
+   * Prevents silent failures when MetaMask is connected to the wrong network.
+   */
+  hubChainId?: number
 }
 
 export interface DepositResult {

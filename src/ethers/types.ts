@@ -10,6 +10,12 @@ export interface VaultAddresses {
   shareOFT?: string;
   /** OFT address for USDC bridging (cross-chain only). */
   usdcOFT?: string;
+  /**
+   * Expected EVM chain ID of the hub. When provided, SDK functions will
+   * throw a clear WrongChainError if the signer is on a different chain.
+   * Prevents silent failures when MetaMask is connected to the wrong network.
+   */
+  hubChainId?: number;
 }
 
 /** Result of a synchronous deposit or mint. */

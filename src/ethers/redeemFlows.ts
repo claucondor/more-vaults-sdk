@@ -14,6 +14,7 @@ import {
 import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
 import { MissingEscrowAddressError } from "./errors";
+import { validateWalletChain } from "./chainValidation";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -58,6 +59,9 @@ export async function redeemShares(
   receiver: string,
   owner: string
 ): Promise<RedeemResult> {
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
+
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
 
   // Static call to get the return value (assets) before broadcasting
@@ -92,6 +96,9 @@ export async function withdrawAssets(
   receiver: string,
   owner: string
 ): Promise<RedeemResult> {
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
+
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
   const tx = await vault.withdraw(assets, receiver, owner);
   const receipt = await tx.wait();
@@ -122,6 +129,9 @@ export async function requestRedeem(
   shares: bigint,
   owner: string
 ): Promise<{ receipt: ContractTransactionReceipt }> {
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
+
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
   const tx = await vault.requestRedeem(shares, owner);
   const receipt = await tx.wait();
@@ -191,6 +201,9 @@ export async function redeemAsync(
   const provider = signer.provider!;
   if (!addresses.escrow) throw new MissingEscrowAddressError();
   const escrow = addresses.escrow;
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(provider, addresses.vault, escrow);

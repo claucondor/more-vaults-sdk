@@ -1,6 +1,9 @@
 // MoreVaults SDK — viem/wagmi
 // Provides typed helpers for all deposit, redeem, and cross-chain vault flows.
 
+// --- Chain constants ---
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID } from './chains'
+
 // --- ABIs ---
 export {
   VAULT_ABI,
@@ -33,6 +36,7 @@ export {
   EscrowNotConfiguredError,
   NotHubVaultError,
   MissingEscrowAddressError,
+  WrongChainError,
 } from './errors'
 
 // --- Deposit Flows ---
@@ -98,3 +102,10 @@ export type {
   MaxWithdrawable,
   VaultSummary,
 } from './userHelpers'
+
+// --- wagmi compatibility ---
+// Re-export viem's PublicClient type for wagmi compatibility.
+// wagmi's usePublicClient() returns a type that is structurally compatible
+// with viem's PublicClient but TypeScript may complain without this cast helper.
+export type { PublicClient as SdkPublicClient } from 'viem'
+export { asSdkClient } from './wagmiCompat'

@@ -15,6 +15,7 @@ import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee } from './utils'
 import { preflightSync, preflightAsync } from './preflight'
 import { MissingEscrowAddressError, VaultPausedError, CapacityFullError } from './errors'
+import { validateWalletChain } from './chainValidation'
 
 /**
  * D1 / D3 — Simple deposit (ERC-4626 standard).
@@ -41,6 +42,9 @@ export async function depositSimple(
 ): Promise<DepositResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
 
   // Pre-flight: validate vault is operational and accepting deposits
   await preflightSync(publicClient, vault)
@@ -111,6 +115,9 @@ export async function depositMultiAsset(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
+
   // Approve each token
   for (let i = 0; i < tokens.length; i++) {
     await ensureAllowance(walletClient, publicClient, tokens[i], vault, amounts[i])
@@ -168,6 +175,9 @@ export async function depositAsync(
   const vault = getAddress(addresses.vault)
   if (!addresses.escrow) throw new MissingEscrowAddressError()
   const escrow = getAddress(addresses.escrow)
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(publicClient, vault, escrow)
@@ -243,6 +253,9 @@ export async function mintAsync(
   const vault = getAddress(addresses.vault)
   if (!addresses.escrow) throw new MissingEscrowAddressError()
   const escrow = getAddress(addresses.escrow)
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  validateWalletChain(walletClient, addresses.hubChainId)
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(publicClient, vault, escrow)

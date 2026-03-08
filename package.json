@@ -1,6 +1,6 @@
 {
   "name": "@oydual31/more-vaults-sdk",
-  "version": "0.1.1",
+  "version": "0.1.4",
   "description": "TypeScript SDK for MoreVaults protocol — viem/wagmi and ethers.js",
   "type": "module",
   "exports": {
@@ -13,6 +13,11 @@
       "types": "./dist/ethers/index.d.ts",
       "import": "./dist/ethers/index.js",
       "require": "./dist/ethers/index.cjs"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "import": "./dist/react/index.js",
+      "require": "./dist/react/index.cjs"
     }
   },
   "files": [
@@ -26,24 +31,40 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "viem": "^2.21.0",
-    "ethers": "^6.13.0"
+    "ethers": ">=6.0.0",
+    "viem": ">=2.0.0"
   },
   "devDependencies": {
+    "@tanstack/react-query": "^5.90.21",
     "@types/node": "^22.0.0",
+    "@types/react": "^18.3.28",
+    "react": "^18.3.1",
     "tsup": "^8.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "wagmi": "^2.19.5"
   },
   "peerDependencies": {
+    "@tanstack/react-query": ">=5.0.0",
+    "ethers": ">=6.0.0",
+    "react": ">=18.0.0",
     "viem": ">=2.0.0",
-    "ethers": ">=6.0.0"
+    "wagmi": ">=2.0.0"
   },
   "peerDependenciesMeta": {
     "viem": {
       "optional": true
     },
     "ethers": {
+      "optional": true
+    },
+    "wagmi": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "@tanstack/react-query": {
       "optional": true
     }
   }

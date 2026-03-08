@@ -9,6 +9,7 @@ import {
 } from "./types";
 import { preflightAsync, preflightSync } from "./preflight";
 import { MissingEscrowAddressError, VaultPausedError, CapacityFullError } from "./errors";
+import { validateWalletChain } from "./chainValidation";
 import { getVaultStatus, quoteLzFee } from "./utils";
 
 /**
@@ -52,6 +53,9 @@ export async function depositSimple(
   receiver: string
 ): Promise<DepositResult> {
   const provider = signer.provider!;
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
 
   // Pre-flight: validate vault is operational and accepting deposits
   await preflightSync(provider, addresses.vault);
@@ -114,6 +118,9 @@ export async function depositMultiAsset(
   receiver: string,
   minShares: bigint
 ): Promise<DepositResult> {
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
+
   // Approve each token
   for (let i = 0; i < tokens.length; i++) {
     await ensureAllowance(signer, tokens[i], addresses.vault, amounts[i]);
@@ -190,6 +197,9 @@ export async function depositAsync(
   if (!addresses.escrow) throw new MissingEscrowAddressError();
   const escrow = addresses.escrow;
 
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
+
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(provider, addresses.vault, escrow);
 
@@ -261,6 +271,9 @@ export async function mintAsync(
   const provider = signer.provider!;
   if (!addresses.escrow) throw new MissingEscrowAddressError();
   const escrow = addresses.escrow;
+
+  // Validate wallet is on the correct chain (opt-in via hubChainId)
+  await validateWalletChain(signer, addresses.hubChainId);
 
   // Pre-flight: validate async cross-chain setup before sending any transaction
   await preflightAsync(provider, addresses.vault, escrow);

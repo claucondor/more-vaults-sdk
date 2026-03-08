@@ -1,6 +1,9 @@
 // MoreVaults SDK -- ethers.js v6
 // Barrel export for all flows and utilities.
 
+// --- Chain constants ---
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID } from "./chains";
+
 // --- Types ---
 export type {
   VaultAddresses,
@@ -36,6 +39,7 @@ export {
   EscrowNotConfiguredError,
   NotHubVaultError,
   MissingEscrowAddressError,
+  WrongChainError,
 } from "./errors";
 
 // --- Deposit flows ---
@@ -101,3 +105,6 @@ export type {
   MaxWithdrawable,
   VaultSummary,
 } from "./userHelpers";
+
+// --- wagmi / ethers adapter compatibility ---
+export { asSdkSigner } from "./wagmiCompat";
