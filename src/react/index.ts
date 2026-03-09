@@ -16,6 +16,9 @@ export { useLzFee } from './useLzFee.js'
 export { useAsyncRequestStatus } from './useAsyncRequestStatus.js'
 export type { AsyncRequestStatusInfo } from './useAsyncRequestStatus.js'
 
+export { useVaultTopology } from './useVaultTopology.js'
+export type { VaultTopology } from './useVaultTopology.js'
+
 // --- Action hooks ---
 export { useOmniDeposit } from './useOmniDeposit.js'
 export { useOmniRedeem } from './useOmniRedeem.js'

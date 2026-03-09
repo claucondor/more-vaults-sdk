@@ -103,6 +103,16 @@ export type {
   VaultSummary,
 } from './userHelpers'
 
+// --- Topology ---
+export {
+  getVaultTopology,
+  getFullVaultTopology,
+  isOnHubChain,
+  getAllVaultChainIds,
+  OMNI_FACTORY_ADDRESS,
+} from './topology'
+export type { VaultTopology } from './topology'
+
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.
 // wagmi's usePublicClient() returns a type that is structurally compatible
