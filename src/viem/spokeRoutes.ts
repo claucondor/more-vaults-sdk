@@ -69,6 +69,18 @@ export function createChainClient(chainId: number) {
   })
 }
 
+const SYMBOL_ABI = [{ name: 'symbol', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] }] as const
+
+/** Read ERC20 symbol() on-chain. Falls back to `fallback` if the call fails. */
+async function readTokenSymbol(client: ReturnType<typeof createChainClient>, token: Address, fallbackSymbol: string): Promise<string> {
+  if (!client) return fallbackSymbol
+  try {
+    return await client.readContract({ address: token, abi: SYMBOL_ABI, functionName: 'symbol' })
+  } catch {
+    return fallbackSymbol
+  }
+}
+
 /** @deprecated use PUBLIC_RPCS — kept for backwards compat in internal checks */
 const PUBLIC_RPC: Partial<Record<number, string>> = Object.fromEntries(
   Object.entries(PUBLIC_RPCS).map(([k, v]) => [k, v![0]])
@@ -86,7 +98,7 @@ export const NATIVE_SYMBOL: Partial<Record<number, string>> = {
 }
 
 export interface InboundRoute {
-  /** Asset symbol from OFT_ROUTES (e.g. 'stgUSDC') */
+  /** Internal route identifier from OFT_ROUTES (e.g. 'stgUSDC') — do NOT show to users */
   symbol: string
   /** Chain ID where user sends from */
   spokeChainId: number
@@ -100,6 +112,13 @@ export interface InboundRoute {
   spokeOft: Address | null
   /** Token user must approve on spoke chain (zeroAddress = native ETH) */
   spokeToken: Address
+  /**
+   * Human-readable symbol of the token the user needs to hold on the spoke chain.
+   * For OFTAdapters this is the underlying token symbol (e.g. 'USDC', 'weETH').
+   * For pure OFTs this is the OFT's own symbol (e.g. 'sUSDe', 'USDe').
+   * Use this — not `symbol` — when displaying the token name to users.
+   */
+  sourceTokenSymbol: string
   /** OFT contract on hub chain — receives tokens for the composer. Null for direct deposits. */
   hubOft: Address | null
   /** oftCmd to use in SendParam (0x01 for Stargate taxi, 0x for standard OFT) */
@@ -174,31 +193,36 @@ export async function getInboundRoutes(
         // Validate route via quoteSend — if it reverts, skip
         try {
           const receiverBytes32 = `0x${getAddress(userAddress).slice(2).padStart(64, '0')}` as `0x${string}`
-          const fee = await client.readContract({
-            address: getAddress(spokeEntry.oft) as Address,
-            abi: OFT_ABI,
-            functionName: 'quoteSend',
-            args: [{
-              dstEid: hubEid,
-              to: receiverBytes32,
-              amountLD: 1_000_000n,
-              minAmountLD: 0n,
-              extraOptions: '0x',
-              composeMsg: '0x',
-              oftCmd,
-            }, false],
-          })
+          const spokeTokenAddr = getAddress(spokeEntry.token) as Address
+          const [fee, sourceTokenSymbol] = await Promise.all([
+            client.readContract({
+              address: getAddress(spokeEntry.oft) as Address,
+              abi: OFT_ABI,
+              functionName: 'quoteSend',
+              args: [{
+                dstEid: hubEid,
+                to: receiverBytes32,
+                amountLD: 1_000_000n,
+                minAmountLD: 0n,
+                extraOptions: '0x',
+                composeMsg: '0x',
+                oftCmd,
+              }, false],
+            }),
+            readTokenSymbol(client, spokeTokenAddr, symbol),
+          ])
 
           results.push({
             symbol,
             spokeChainId,
-            depositType:   'oft-compose',
-            spokeOft:      getAddress(spokeEntry.oft) as Address,
-            spokeToken:    getAddress(spokeEntry.token) as Address,
-            hubOft:        getAddress(hubEntry.oft) as Address,
+            depositType:      'oft-compose',
+            spokeOft:         getAddress(spokeEntry.oft) as Address,
+            spokeToken:       spokeTokenAddr,
+            sourceTokenSymbol,
+            hubOft:           getAddress(hubEntry.oft) as Address,
             oftCmd,
-            lzFeeEstimate: fee.nativeFee,
-            nativeSymbol:  NATIVE_SYMBOL[spokeChainId] ?? 'ETH',
+            lzFeeEstimate:    fee.nativeFee,
+            nativeSymbol:     NATIVE_SYMBOL[spokeChainId] ?? 'ETH',
           })
         } catch {
           // Route not available — skip silently
@@ -211,16 +235,19 @@ export async function getInboundRoutes(
   for (const [symbol, chainMap] of Object.entries(OFT_ROUTES)) {
     const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
     if (hubEntry && getAddress(hubEntry.token) === getAddress(vaultAsset)) {
+      const hubTokenAddr = getAddress(hubEntry.token) as Address
+      const sourceTokenSymbol = await readTokenSymbol(hubClient, hubTokenAddr, symbol)
       results.unshift({
         symbol,
-        spokeChainId:  hubChainId,
-        depositType:   'direct',
-        spokeOft:      null,
-        spokeToken:    getAddress(hubEntry.token) as Address,
-        hubOft:        null,
-        oftCmd:        '0x',
-        lzFeeEstimate: 0n,
-        nativeSymbol:  NATIVE_SYMBOL[hubChainId] ?? 'ETH',
+        spokeChainId:     hubChainId,
+        depositType:      'direct',
+        spokeOft:         null,
+        spokeToken:       hubTokenAddr,
+        sourceTokenSymbol,
+        hubOft:           null,
+        oftCmd:           '0x',
+        lzFeeEstimate:    0n,
+        nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
       })
       break
     }
