@@ -61,7 +61,7 @@ const PUBLIC_RPCS: Partial<Record<number, string[]>> = {
 }
 
 /** Create a public client with fallback transport for a given chain ID */
-function createChainClient(chainId: number) {
+export function createChainClient(chainId: number) {
   const rpcs = PUBLIC_RPCS[chainId]
   if (!rpcs?.length) return null
   return createPublicClient({

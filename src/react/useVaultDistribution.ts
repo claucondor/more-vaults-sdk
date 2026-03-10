@@ -1,24 +1,14 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useChainId, usePublicClient } from 'wagmi'
-import { createPublicClient, http } from 'viem'
 import type { Address, PublicClient } from 'viem'
 import { asSdkClient } from '../viem/wagmiCompat.js'
 import { getVaultDistribution } from '../viem/distribution.js'
 import type { VaultDistribution } from '../viem/distribution.js'
+import { createChainClient } from '../viem/spokeRoutes.js'
 import { useVaultTopology } from './useVaultTopology.js'
 
 export type { VaultDistribution }
-
-/**
- * Public RPCs for spoke chain reads.
- * These are free, rate-limited endpoints — suitable for occasional reads
- * but not for high-frequency polling.
- */
-const SPOKE_RPCS: Record<number, string> = {
-  1: 'https://eth.llamarpc.com',
-  42161: 'https://arbitrum.public.blockpi.network/v1/rpc/public',
-}
 
 interface UseVaultDistributionReturn {
   distribution: VaultDistribution | undefined
@@ -30,7 +20,7 @@ interface UseVaultDistributionReturn {
  *
  * Uses the connected wallet's chain as the hub client (via wagmi),
  * discovers spoke chains via topology, and creates ephemeral public
- * clients with hardcoded public RPCs for spoke reads.
+ * clients with fallback RPCs for spoke reads (all supported chains covered).
  *
  * Spoke reads that fail (bad RPC, timeout) degrade gracefully —
  * those spokes will appear with `isReachable: false`.
@@ -51,18 +41,15 @@ export function useVaultDistribution(
   const publicClient = usePublicClient()
   const { topology } = useVaultTopology(vault)
 
-  // Build spoke clients from hardcoded public RPCs.
-  // Only create clients for chains we have an RPC URL for.
+  // Build spoke clients using the shared fallback-RPC factory from spokeRoutes.
+  // Covers all supported chains (Eth, Arb, Op, BSC, Sonic, Flow) with multiple
+  // fallback endpoints each — spokes without a known RPC degrade to isReachable: false.
   const spokeClients = useMemo((): Record<number, PublicClient> => {
     if (!topology) return {}
     const clients: Record<number, PublicClient> = {}
     for (const spokeChainId of topology.spokeChainIds) {
-      const rpcUrl = SPOKE_RPCS[spokeChainId]
-      if (rpcUrl) {
-        clients[spokeChainId] = createPublicClient({
-          transport: http(rpcUrl),
-        }) as PublicClient
-      }
+      const client = createChainClient(spokeChainId)
+      if (client) clients[spokeChainId] = client as PublicClient
     }
     return clients
   }, [topology])
