@@ -4,8 +4,9 @@ import {
   type WalletClient,
   encodeAbiParameters,
   getAddress,
+  zeroAddress,
 } from 'viem'
-import { VAULT_ABI, BRIDGE_ABI, ERC20_ABI } from './abis'
+import { VAULT_ABI, BRIDGE_ABI, ERC20_ABI, CONFIG_ABI } from './abis'
 import type {
   VaultAddresses,
   DepositResult,
@@ -14,7 +15,7 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee } from './utils'
 import { preflightSync, preflightAsync } from './preflight'
-import { MissingEscrowAddressError, VaultPausedError, CapacityFullError } from './errors'
+import { EscrowNotConfiguredError, VaultPausedError, CapacityFullError } from './errors'
 import { validateWalletChain } from './chainValidation'
 
 /**
@@ -173,8 +174,10 @@ export async function depositAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
-  if (!addresses.escrow) throw new MissingEscrowAddressError()
-  const escrow = getAddress(addresses.escrow)
+  const escrow = addresses.escrow
+    ? getAddress(addresses.escrow)
+    : await publicClient.readContract({ address: vault, abi: CONFIG_ABI, functionName: 'getEscrow' })
+  if (escrow === zeroAddress) throw new EscrowNotConfiguredError(vault)
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
@@ -251,8 +254,10 @@ export async function mintAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
-  if (!addresses.escrow) throw new MissingEscrowAddressError()
-  const escrow = getAddress(addresses.escrow)
+  const escrow = addresses.escrow
+    ? getAddress(addresses.escrow)
+    : await publicClient.readContract({ address: vault, abi: CONFIG_ABI, functionName: 'getEscrow' })
+  if (escrow === zeroAddress) throw new EscrowNotConfiguredError(vault)
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)

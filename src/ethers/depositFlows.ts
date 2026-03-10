@@ -1,4 +1,4 @@
-import { Contract, AbiCoder, Signer } from "ethers";
+import { Contract, AbiCoder, Signer, ZeroAddress } from "ethers";
 import type { Provider } from "ethers";
 import { VAULT_ABI, BRIDGE_ABI, ERC20_ABI } from "./abis";
 import {
@@ -8,7 +8,7 @@ import {
   ActionType,
 } from "./types";
 import { preflightAsync, preflightSync } from "./preflight";
-import { MissingEscrowAddressError, VaultPausedError, CapacityFullError } from "./errors";
+import { EscrowNotConfiguredError, VaultPausedError, CapacityFullError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
 import { getVaultStatus, quoteLzFee } from "./utils";
 
@@ -194,8 +194,9 @@ export async function depositAsync(
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
   const provider = signer.provider!;
-  if (!addresses.escrow) throw new MissingEscrowAddressError();
-  const escrow = addresses.escrow;
+  const escrow = addresses.escrow
+    ?? await new Contract(addresses.vault, ['function getEscrow() view returns (address)'], provider).getEscrow()
+  if (escrow === ZeroAddress) throw new EscrowNotConfiguredError(addresses.vault)
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
@@ -269,8 +270,9 @@ export async function mintAsync(
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
   const provider = signer.provider!;
-  if (!addresses.escrow) throw new MissingEscrowAddressError();
-  const escrow = addresses.escrow;
+  const escrow = addresses.escrow
+    ?? await new Contract(addresses.vault, ['function getEscrow() view returns (address)'], provider).getEscrow()
+  if (escrow === ZeroAddress) throw new EscrowNotConfiguredError(addresses.vault)
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);

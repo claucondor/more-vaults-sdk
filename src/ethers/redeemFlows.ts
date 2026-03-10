@@ -1,4 +1,4 @@
-import { Contract, AbiCoder, zeroPadValue, Signer, Provider } from "ethers";
+import { Contract, AbiCoder, zeroPadValue, Signer, Provider, ZeroAddress } from "ethers";
 import {
   VAULT_ABI,
   BRIDGE_ABI,
@@ -13,7 +13,7 @@ import {
 } from "./types";
 import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
-import { MissingEscrowAddressError } from "./errors";
+import { EscrowNotConfiguredError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
 
 /**
@@ -199,8 +199,9 @@ export async function redeemAsync(
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
   const provider = signer.provider!;
-  if (!addresses.escrow) throw new MissingEscrowAddressError();
-  const escrow = addresses.escrow;
+  const escrow = addresses.escrow
+    ?? await new Contract(addresses.vault, ['function getEscrow() view returns (address)'], provider).getEscrow()
+  if (escrow === ZeroAddress) throw new EscrowNotConfiguredError(addresses.vault)
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);

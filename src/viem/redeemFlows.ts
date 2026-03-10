@@ -6,8 +6,9 @@ import {
   encodeAbiParameters,
   getAddress,
   pad,
+  zeroAddress,
 } from 'viem'
-import { VAULT_ABI, BRIDGE_ABI, OFT_ABI } from './abis'
+import { VAULT_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI } from './abis'
 import type {
   VaultAddresses,
   RedeemResult,
@@ -16,7 +17,7 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
-import { MissingEscrowAddressError } from './errors'
+import { EscrowNotConfiguredError } from './errors'
 import { validateWalletChain } from './chainValidation'
 
 /**
@@ -238,8 +239,10 @@ export async function redeemAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
-  if (!addresses.escrow) throw new MissingEscrowAddressError()
-  const escrow = getAddress(addresses.escrow)
+  const escrow = addresses.escrow
+    ? getAddress(addresses.escrow)
+    : await publicClient.readContract({ address: vault, abi: CONFIG_ABI, functionName: 'getEscrow' })
+  if (escrow === zeroAddress) throw new EscrowNotConfiguredError(vault)
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
