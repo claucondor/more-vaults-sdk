@@ -3,6 +3,17 @@ import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
 import { OFT_ABI, ERC20_ABI } from './abis'
 import { getVaultTopology } from './topology'
 
+export interface OutboundRoute {
+  /** Chain ID where user can receive shares/assets */
+  chainId: number
+  /** Whether this chain is the hub (direct redeem) or a spoke (shares bridged back) */
+  routeType: 'hub' | 'spoke'
+  /** LZ EID for this chain */
+  eid: number
+  /** Native gas symbol */
+  nativeSymbol: string
+}
+
 /** Public RPC endpoints per chain ID for reading spoke chain data without wallet connection */
 const PUBLIC_RPC: Partial<Record<number, string>> = {
   1:     'https://eth.llamarpc.com',
@@ -207,4 +218,100 @@ export async function getUserBalancesForRoutes(
       }
     })
   )
+}
+
+/**
+ * Find all outbound routes for a vault — chains where a user can receive
+ * shares/assets when redeeming.
+ *
+ * The hub chain is always first (direct redeem). Spoke chains follow
+ * (shares are bridged back via the composer).
+ *
+ * @param hubChainId  Chain ID of the vault hub (e.g. 8453 for Base)
+ * @param vault       Vault address (to resolve registered spoke chains)
+ */
+export async function getOutboundRoutes(
+  hubChainId: number,
+  vault: Address,
+): Promise<OutboundRoute[]> {
+  const hubEid = CHAIN_ID_TO_EID[hubChainId]
+  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
+
+  const hubRpc = PUBLIC_RPC[hubChainId]
+  if (!hubRpc) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
+
+  const hubClient = createPublicClient({ transport: http(hubRpc) })
+  const topology = await getVaultTopology(hubClient, vault)
+
+  const routes: OutboundRoute[] = [
+    {
+      chainId: hubChainId,
+      routeType: 'hub',
+      eid: hubEid,
+      nativeSymbol: NATIVE_SYMBOL[hubChainId] ?? 'ETH',
+    },
+  ]
+
+  for (const spokeChainId of topology.spokeChainIds) {
+    const eid = CHAIN_ID_TO_EID[spokeChainId]
+    if (!eid) continue
+
+    routes.push({
+      chainId: spokeChainId,
+      routeType: 'spoke',
+      eid,
+      nativeSymbol: NATIVE_SYMBOL[spokeChainId] ?? 'ETH',
+    })
+  }
+
+  return routes
+}
+
+/**
+ * Quote the LayerZero native fee for a cross-chain deposit with a real amount.
+ *
+ * More precise than the `lzFeeEstimate` field on `InboundRoute`, which uses
+ * a dummy 1 USDC amount.
+ *
+ * @param route       An InboundRoute from `getInboundRoutes()`
+ * @param hubChainId  Chain ID of the vault hub (needed for LZ destination EID)
+ * @param amount      Real deposit amount in token decimals
+ * @param userAddress User address (used as receiver for fee quote)
+ * @returns Native fee in wei of the spoke chain's gas token, or 0n for direct deposits
+ */
+export async function quoteRouteDepositFee(
+  route: InboundRoute,
+  hubChainId: number,
+  amount: bigint,
+  userAddress: Address,
+): Promise<bigint> {
+  if (route.depositType === 'direct') return 0n
+
+  const hubEid = CHAIN_ID_TO_EID[hubChainId]
+  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
+
+  if (!route.spokeOft) throw new Error('Route is oft-compose but spokeOft is null')
+
+  const rpc = PUBLIC_RPC[route.spokeChainId]
+  if (!rpc) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`)
+
+  const client = createPublicClient({ transport: http(rpc) })
+
+  const receiverBytes32 = `0x${getAddress(userAddress).slice(2).padStart(64, '0')}` as `0x${string}`
+  const fee = await client.readContract({
+    address: route.spokeOft,
+    abi: OFT_ABI,
+    functionName: 'quoteSend',
+    args: [{
+      dstEid: hubEid,
+      to: receiverBytes32,
+      amountLD: amount,
+      minAmountLD: 0n,
+      extraOptions: '0x',
+      composeMsg: '0x',
+      oftCmd: route.oftCmd,
+    }, false],
+  })
+
+  return fee.nativeFee
 }

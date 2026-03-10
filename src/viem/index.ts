@@ -118,8 +118,8 @@ export { getVaultDistribution, getVaultDistributionWithTopology } from './distri
 export type { VaultDistribution, SpokeBalance } from './distribution'
 
 // --- Spoke Routes ---
-export { getInboundRoutes, getUserBalancesForRoutes, NATIVE_SYMBOL } from './spokeRoutes'
-export type { InboundRoute, InboundRouteWithBalance } from './spokeRoutes'
+export { getInboundRoutes, getUserBalancesForRoutes, getOutboundRoutes, quoteRouteDepositFee, NATIVE_SYMBOL } from './spokeRoutes'
+export type { InboundRoute, InboundRouteWithBalance, OutboundRoute } from './spokeRoutes'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.

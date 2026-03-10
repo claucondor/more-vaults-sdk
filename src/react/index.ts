@@ -30,3 +30,6 @@ export { useVaultDistribution } from './useVaultDistribution.js'
 
 // --- Smart (auto-routing) hooks ---
 export { useSmartDeposit } from './useSmartDeposit.js'
+
+// --- Inbound Routes ---
+export { useInboundRoutes, getRouteTokenDecimals } from './useInboundRoutes.js'
