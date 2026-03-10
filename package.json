@@ -1,6 +1,6 @@
 {
   "name": "@oydual31/more-vaults-sdk",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "TypeScript SDK for MoreVaults protocol — viem/wagmi and ethers.js",
   "type": "module",
   "exports": {
