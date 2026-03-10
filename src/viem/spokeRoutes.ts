@@ -1,4 +1,4 @@
-import { type Address, createPublicClient, http, getAddress, zeroAddress } from 'viem'
+import { type Address, createPublicClient, http, fallback, getAddress, zeroAddress } from 'viem'
 import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
 import { OFT_ABI, ERC20_ABI } from './abis'
 import { getVaultTopology } from './topology'
@@ -14,16 +14,65 @@ export interface OutboundRoute {
   nativeSymbol: string
 }
 
-/** Public RPC endpoints per chain ID for reading spoke chain data without wallet connection */
-const PUBLIC_RPC: Partial<Record<number, string>> = {
-  1:     'https://ethereum-rpc.publicnode.com',
-  10:    'https://mainnet.optimism.io',
-  42161: 'https://arbitrum-one-rpc.publicnode.com',
-  8453:  'https://base-rpc.publicnode.com',
-  747:   'https://mainnet.evm.nodes.onflow.org',
-  146:   'https://rpc.soniclabs.com',
-  56:    'https://bsc-dataseed1.binance.org',
+/**
+ * Multiple public RPC endpoints per chain — tried in order via viem fallback transport.
+ * First entry is preferred; subsequent entries are used if the first fails or times out.
+ */
+const PUBLIC_RPCS: Partial<Record<number, string[]>> = {
+  1: [
+    'https://ethereum-rpc.publicnode.com',
+    'https://ethereum.publicnode.com',
+    'https://eth.drpc.org',
+    'https://eth-mainnet.public.blastapi.io',
+    'https://0xrpc.io/eth',
+    'https://eth.llamarpc.com',
+  ],
+  10: [
+    'https://mainnet.optimism.io',
+    'https://optimism-rpc.publicnode.com',
+    'https://op.drpc.org',
+  ],
+  42161: [
+    'https://arbitrum-one-rpc.publicnode.com',
+    'https://arbitrum.publicnode.com',
+    'https://arbitrum.public.blockpi.network/v1/rpc/public',
+    'https://public-arb-mainnet.fastnode.io',
+  ],
+  8453: [
+    'https://base-rpc.publicnode.com',
+    'https://base.llamarpc.com',
+    'https://base.drpc.org',
+    'https://mainnet.base.org',
+    'https://1rpc.io/base',
+    'https://base.rpc.subquery.network/public',
+  ],
+  747: [
+    'https://mainnet.evm.nodes.onflow.org',
+  ],
+  146: [
+    'https://rpc.soniclabs.com',
+    'https://sonic.drpc.org',
+  ],
+  56: [
+    'https://bsc-dataseed1.binance.org',
+    'https://bsc-dataseed2.binance.org',
+    'https://bsc-rpc.publicnode.com',
+  ],
 }
+
+/** Create a public client with fallback transport for a given chain ID */
+function createChainClient(chainId: number) {
+  const rpcs = PUBLIC_RPCS[chainId]
+  if (!rpcs?.length) return null
+  return createPublicClient({
+    transport: rpcs.length === 1 ? http(rpcs[0]) : fallback(rpcs.map(url => http(url))),
+  })
+}
+
+/** @deprecated use PUBLIC_RPCS — kept for backwards compat in internal checks */
+const PUBLIC_RPC: Partial<Record<number, string>> = Object.fromEntries(
+  Object.entries(PUBLIC_RPCS).map(([k, v]) => [k, v![0]])
+)
 
 /** Native gas token symbol per chain ID — lzFeeEstimate is denominated in this token */
 export const NATIVE_SYMBOL: Partial<Record<number, string>> = {
@@ -90,9 +139,8 @@ export async function getInboundRoutes(
   if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
 
   // Fetch vault topology to get registered spoke chains
-  const hubRpc = PUBLIC_RPC[hubChainId]
-  if (!hubRpc) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
-  const hubClient = createPublicClient({ transport: http(hubRpc) })
+  const hubClient = createChainClient(hubChainId)
+  if (!hubClient) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
   const topology = await getVaultTopology(hubClient, vault)
   const registeredSpokes = new Set(topology.spokeChainIds)
 
@@ -120,10 +168,8 @@ export async function getInboundRoutes(
         const spokeEntry = (chainMap as Record<number, { oft: string; token: string }>)[spokeChainId]
         if (!spokeEntry) return
 
-        const rpc = PUBLIC_RPC[spokeChainId]
-        if (!rpc) return
-
-        const client = createPublicClient({ transport: http(rpc) })
+        const client = createChainClient(spokeChainId)
+        if (!client) return
 
         // Validate route via quoteSend — if it reverts, skip
         try {
@@ -193,10 +239,8 @@ export async function getUserBalancesForRoutes(
 ): Promise<InboundRouteWithBalance[]> {
   return Promise.all(
     routes.map(async (route) => {
-      const rpc = PUBLIC_RPC[route.spokeChainId]
-      if (!rpc) return { ...route, userBalance: 0n }
-
-      const client = createPublicClient({ transport: http(rpc) })
+      const client = createChainClient(route.spokeChainId)
+      if (!client) return { ...route, userBalance: 0n }
 
       try {
         let userBalance: bigint
@@ -237,10 +281,9 @@ export async function getOutboundRoutes(
   const hubEid = CHAIN_ID_TO_EID[hubChainId]
   if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
 
-  const hubRpc = PUBLIC_RPC[hubChainId]
-  if (!hubRpc) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
+  const hubClient = createChainClient(hubChainId)
+  if (!hubClient) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
 
-  const hubClient = createPublicClient({ transport: http(hubRpc) })
   const topology = await getVaultTopology(hubClient, vault)
 
   const routes: OutboundRoute[] = [
@@ -292,10 +335,8 @@ export async function quoteRouteDepositFee(
 
   if (!route.spokeOft) throw new Error('Route is oft-compose but spokeOft is null')
 
-  const rpc = PUBLIC_RPC[route.spokeChainId]
-  if (!rpc) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`)
-
-  const client = createPublicClient({ transport: http(rpc) })
+  const client = createChainClient(route.spokeChainId)
+  if (!client) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`)
 
   const receiverBytes32 = `0x${getAddress(userAddress).slice(2).padStart(64, '0')}` as `0x${string}`
   const fee = await client.readContract({
