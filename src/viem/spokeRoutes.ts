@@ -16,7 +16,7 @@ export interface OutboundRoute {
 
 /** Public RPC endpoints per chain ID for reading spoke chain data without wallet connection */
 const PUBLIC_RPC: Partial<Record<number, string>> = {
-  1:     'https://eth.llamarpc.com',
+  1:     'https://ethereum-rpc.publicnode.com',
   10:    'https://mainnet.optimism.io',
   42161: 'https://arbitrum-one-rpc.publicnode.com',
   8453:  'https://base-rpc.publicnode.com',
