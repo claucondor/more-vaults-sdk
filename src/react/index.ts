@@ -25,5 +25,8 @@ export { useOmniRedeem } from './useOmniRedeem.js'
 export { useDepositSimple } from './useDepositSimple.js'
 export { useRedeemShares } from './useRedeemShares.js'
 
+// --- Distribution ---
+export { useVaultDistribution } from './useVaultDistribution.js'
+
 // --- Smart (auto-routing) hooks ---
 export { useSmartDeposit } from './useSmartDeposit.js'

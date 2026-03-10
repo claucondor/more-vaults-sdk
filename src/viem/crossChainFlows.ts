@@ -28,7 +28,7 @@ import { ensureAllowance } from './utils'
  * @param walletClient   Wallet client on the SPOKE chain
  * @param publicClient   Public client on the SPOKE chain
  * @param spokeOFT       OFT contract address on spoke chain (e.g. USDC OFT adapter)
- * @param hubEid         LayerZero EID for the hub chain — where tokens are sent (e.g. Flow EVM = 30332)
+ * @param hubEid         LayerZero EID for the hub chain — where tokens are sent (e.g. Flow EVM = 30336)
  * @param spokeEid       LayerZero EID for the spoke chain — where shares are sent back
  * @param amount         Amount of tokens to bridge (in spoke token decimals)
  * @param receiver       Address that will receive vault shares on the spoke chain

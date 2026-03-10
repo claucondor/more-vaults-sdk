@@ -258,7 +258,7 @@ export async function redeemAsync(
  *
  * @param signer      - Wallet on the spoke chain holding shares.
  * @param shareOFT    - OFTAdapter address for the share token on spoke.
- * @param hubChainEid - LayerZero endpoint ID for the hub chain (e.g. 30332 for Flow EVM).
+ * @param hubChainEid - LayerZero endpoint ID for the hub chain (e.g. 30336 for Flow EVM).
  * @param shares      - Number of shares to bridge.
  * @param receiver    - Address on hub chain that will receive the shares.
  * @param lzFee       - Native fee for LayerZero message.

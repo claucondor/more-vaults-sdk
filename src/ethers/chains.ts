@@ -7,9 +7,13 @@ export const CHAIN_IDS = {
   ethereum: 1,
 } as const;
 
-/** LayerZero Endpoint IDs (EID) for chains supported by MoreVaults */
+/**
+ * LayerZero Endpoint IDs (EID) for chains supported by MoreVaults.
+ * Verified on-chain via MoreVaults OmniFactory.localEid() on each chain.
+ * - flowMainnet: 30336 (0x7680) — confirmed from factory + LZ endpoint on Flow EVM mainnet
+ */
 export const LZ_EIDS = {
-  flowMainnet: 30332,
+  flowMainnet: 30336,
   flowTestnet: 30333,
   arbitrum: 30110,
   base: 30184,

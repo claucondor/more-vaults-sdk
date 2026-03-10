@@ -298,7 +298,7 @@ export async function redeemAsync(
  * @param walletClient   Wallet client on the SPOKE chain
  * @param publicClient   Public client on the SPOKE chain
  * @param shareOFT       OFTAdapter address for vault shares on the spoke chain
- * @param hubChainEid    LayerZero Endpoint ID for the hub chain (Flow EVM = 30332)
+ * @param hubChainEid    LayerZero Endpoint ID for the hub chain (Flow EVM = 30336)
  * @param shares         Amount of vault shares to bridge
  * @param receiver       Receiver address on the HUB chain
  * @param lzFee          msg.value for OFT send (quote via OFT.quoteSend)

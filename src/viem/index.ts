@@ -2,7 +2,7 @@
 // Provides typed helpers for all deposit, redeem, and cross-chain vault flows.
 
 // --- Chain constants ---
-export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID } from './chains'
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, OFT_ROUTES, STARGATE_TAXI_CMD, USDC_STARGATE_OFT, USDC_TOKEN } from './chains'
 
 // --- ABIs ---
 export {
@@ -112,6 +112,14 @@ export {
   OMNI_FACTORY_ADDRESS,
 } from './topology'
 export type { VaultTopology } from './topology'
+
+// --- Distribution ---
+export { getVaultDistribution, getVaultDistributionWithTopology } from './distribution'
+export type { VaultDistribution, SpokeBalance } from './distribution'
+
+// --- Spoke Routes ---
+export { getInboundRoutes, getUserBalancesForRoutes, NATIVE_SYMBOL } from './spokeRoutes'
+export type { InboundRoute, InboundRouteWithBalance } from './spokeRoutes'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.

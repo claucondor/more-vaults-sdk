@@ -41,7 +41,7 @@ async function ensureAllowance(
  *
  * @param signer        - Wallet on the spoke chain.
  * @param spokeOFT      - OFT/OFTAdapter address on the spoke chain.
- * @param hubEid        - LayerZero EID for the hub chain (e.g. 30332 for Flow EVM).
+ * @param hubEid        - LayerZero EID for the hub chain (e.g. 30336 for Flow EVM).
  * @param spokeEid      - LayerZero EID for the spoke chain — where shares are sent back.
  * @param amount        - Amount of underlying tokens to bridge and deposit.
  * @param receiver      - Address that will receive shares on the spoke chain.
