@@ -3,3 +3,4 @@ dist/
 *.js.map
 tests/addresses.json
 .env
+_*.ts
