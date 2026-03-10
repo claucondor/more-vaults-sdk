@@ -9,6 +9,7 @@
 import { Contract, ZeroAddress } from "ethers";
 import type { Provider } from "ethers";
 import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI } from "./abis";
+import { InsufficientLiquidityError } from "./errors";
 
 /**
  * Pre-flight checks for async cross-chain flows (D4 / D5 / R5).
@@ -94,24 +95,32 @@ export async function preflightRedeemLiquidity(
   vault: string,
   shares: bigint
 ): Promise<void> {
-  const vaultContract = new Contract(vault, VAULT_ABI, provider);
+  const config = new Contract(vault, CONFIG_ABI, provider);
+  const bridge = new Contract(vault, BRIDGE_ABI, provider);
 
+  // Check if this is a hub vault without oracle accounting.
+  // Only those vaults can have liquidity stranded on spoke chains.
+  const [isHub, oraclesEnabled]: [boolean, boolean] = await Promise.all([
+    config.isHub(),
+    bridge.oraclesCrossChainAccounting(),
+  ]);
+
+  // Non-hub vaults and oracle-on hubs hold all redeemable assets locally —
+  // no liquidity gap is possible, so skip the check.
+  if (!isHub || oraclesEnabled) return;
+
+  const vaultContract = new Contract(vault, VAULT_ABI, provider);
   const underlying: string = await vaultContract.asset();
 
   const underlyingContract = new Contract(underlying, ERC20_ABI, provider);
+  // previewRedeem accounts for fees/slippage, unlike convertToAssets
   const [hubLiquid, assetsNeeded]: [bigint, bigint] = await Promise.all([
     underlyingContract.balanceOf(vault),
-    vaultContract.convertToAssets(shares),
+    vaultContract.previewRedeem(shares),
   ]);
 
   if (hubLiquid < assetsNeeded) {
-    throw new Error(
-      `[MoreVaults] Insufficient hub liquidity for redeem.\n` +
-      `  Hub liquid balance : ${hubLiquid}\n` +
-      `  Estimated required : ${assetsNeeded}\n` +
-      `Submitting this redeem will waste the LayerZero fee — the request will be auto-refunded.\n` +
-      `Ask the vault curator to repatriate liquidity from spoke chains first.`
-    );
+    throw new InsufficientLiquidityError(vault, hubLiquid, assetsNeeded);
   }
 }
 

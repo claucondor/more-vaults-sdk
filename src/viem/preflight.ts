@@ -8,6 +8,7 @@
 
 import { type Address, type PublicClient, getAddress, zeroAddress } from 'viem'
 import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI } from './abis'
+import { InsufficientLiquidityError } from './errors'
 
 /**
  * Pre-flight checks for async cross-chain flows (D4 / D5 / R5).
@@ -118,14 +119,33 @@ export async function preflightRedeemLiquidity(
 ): Promise<void> {
   const v = getAddress(vault)
 
-  // Need underlying address first
+  // Batch 1: check if this is a hub vault without oracle accounting.
+  // Only those vaults can have liquidity stranded on spoke chains.
+  const [isHub, oraclesEnabled] = await Promise.all([
+    publicClient.readContract({
+      address: v,
+      abi: CONFIG_ABI,
+      functionName: 'isHub',
+    }),
+    publicClient.readContract({
+      address: v,
+      abi: BRIDGE_ABI,
+      functionName: 'oraclesCrossChainAccounting',
+    }),
+  ])
+
+  // Non-hub vaults and oracle-on hubs hold all redeemable assets locally —
+  // no liquidity gap is possible, so skip the check.
+  if (!isHub || oraclesEnabled) return
+
+  // Batch 2: underlying address (needed for ERC-20 balanceOf)
   const underlying = await publicClient.readContract({
     address: v,
     abi: VAULT_ABI,
     functionName: 'asset',
   })
 
-  // Parallel: hub liquid balance + estimated assets for these shares
+  // Batch 3: hub liquid balance + previewRedeem (accounts for fees/slippage)
   const [hubLiquid, assetsNeeded] = await Promise.all([
     publicClient.readContract({
       address: getAddress(underlying as Address),
@@ -136,19 +156,16 @@ export async function preflightRedeemLiquidity(
     publicClient.readContract({
       address: v,
       abi: VAULT_ABI,
-      functionName: 'convertToAssets',
+      functionName: 'previewRedeem',
       args: [shares],
     }),
   ])
 
-  if ((hubLiquid as bigint) < (assetsNeeded as bigint)) {
-    throw new Error(
-      `[MoreVaults] Insufficient hub liquidity for redeem.\n` +
-      `  Hub liquid balance : ${hubLiquid}\n` +
-      `  Estimated required : ${assetsNeeded}\n` +
-      `Submitting this redeem will waste the LayerZero fee — the request will be auto-refunded.\n` +
-      `Ask the vault curator to repatriate liquidity from spoke chains first.`,
-    )
+  const hubLiquidBig = hubLiquid as bigint
+  const assetsNeededBig = assetsNeeded as bigint
+
+  if (hubLiquidBig < assetsNeededBig) {
+    throw new InsufficientLiquidityError(vault, hubLiquidBig, assetsNeededBig)
   }
 }
 
