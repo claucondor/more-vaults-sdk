@@ -64,6 +64,13 @@ const PUBLIC_RPCS: Partial<Record<number, string[]>> = {
 // multicall3 is deployed at the same deterministic address on all supported chains
 const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11' as const
 
+/** Returns a viem transport (factory) for a given chain ID, or null if not supported */
+export function createChainTransport(chainId: number) {
+  const rpcs = PUBLIC_RPCS[chainId]
+  if (!rpcs?.length) return null
+  return rpcs.length === 1 ? http(rpcs[0]) : fallback(rpcs.map(url => http(url)))
+}
+
 /** Create a public client with fallback transport for a given chain ID */
 export function createChainClient(chainId: number) {
   const rpcs = PUBLIC_RPCS[chainId]
