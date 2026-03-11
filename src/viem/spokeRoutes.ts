@@ -2,6 +2,7 @@ import { type Address, createPublicClient, http, fallback, getAddress, zeroAddre
 import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
 import { OFT_ABI, ERC20_ABI } from './abis'
 import { getVaultTopology } from './topology'
+import { isAsyncMode, quoteLzFee } from './utils'
 
 export interface OutboundRoute {
   /** Chain ID where user can receive shares/assets */
@@ -114,10 +115,11 @@ export interface InboundRoute {
   spokeChainId: number
   /**
    * How the deposit is executed:
-   * - 'direct'      → user is on the hub chain, use depositSimple/depositAsync
-   * - 'oft-compose' → user is on a spoke chain, use depositFromSpoke via OFT compose
+   * - 'direct'       → user is on the hub chain, vault uses standard ERC-4626 (depositSimple). No LZ fee.
+   * - 'direct-async' → user is on the hub chain, vault uses async accounting (depositAsync). LZ fee required.
+   * - 'oft-compose'  → user is on a spoke chain, use depositFromSpoke via OFT compose. LZ fee required.
    */
-  depositType: 'direct' | 'oft-compose'
+  depositType: 'direct' | 'direct-async' | 'oft-compose'
   /** OFT contract on spoke chain — pass as `spokeOFT` to depositFromSpoke. Null for direct deposits. */
   spokeOft: Address | null
   /** Token user must approve on spoke chain (zeroAddress = native ETH) */
@@ -241,26 +243,38 @@ export async function getInboundRoutes(
     )
   }
 
-  // Add the hub chain itself as a direct deposit option
-  for (const [symbol, chainMap] of Object.entries(OFT_ROUTES)) {
-    const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
-    if (hubEntry && getAddress(hubEntry.token) === getAddress(vaultAsset)) {
-      const hubTokenAddr = getAddress(hubEntry.token) as Address
-      const sourceTokenSymbol = await readTokenSymbol(hubClient, hubTokenAddr, symbol)
-      results.unshift({
-        symbol,
-        spokeChainId:     hubChainId,
-        depositType:      'direct',
-        spokeOft:         null,
-        spokeToken:       hubTokenAddr,
-        sourceTokenSymbol,
-        hubOft:           null,
-        oftCmd:           '0x',
-        lzFeeEstimate:    0n,
-        nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
-      })
-      break
-    }
+  // Add the hub chain itself as a deposit option.
+  // For async vaults the vault uses depositAsync which requires a LZ fee even on the hub chain.
+  const [asyncMode, ...hubOftEntries] = await Promise.all([
+    isAsyncMode(hubClient, vault),
+    ...Object.entries(OFT_ROUTES).map(async ([symbol, chainMap]) => {
+      const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
+      if (!hubEntry || getAddress(hubEntry.token) !== getAddress(vaultAsset)) return null
+      return { symbol, hubEntry }
+    }),
+  ])
+
+  const hubOftEntry = hubOftEntries.find((e) => e !== null) ?? null
+
+  if (hubOftEntry) {
+    const { symbol, hubEntry } = hubOftEntry
+    const hubTokenAddr = getAddress(hubEntry.token) as Address
+    const [sourceTokenSymbol, lzFeeEstimate] = await Promise.all([
+      readTokenSymbol(hubClient, hubTokenAddr, symbol),
+      asyncMode ? quoteLzFee(hubClient, vault) : Promise.resolve(0n),
+    ])
+    results.unshift({
+      symbol,
+      spokeChainId:     hubChainId,
+      depositType:      asyncMode ? 'direct-async' : 'direct',
+      spokeOft:         null,
+      spokeToken:       hubTokenAddr,
+      sourceTokenSymbol,
+      hubOft:           null,
+      oftCmd:           '0x',
+      lzFeeEstimate,
+      nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
+    })
   }
 
   return results
