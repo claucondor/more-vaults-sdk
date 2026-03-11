@@ -263,14 +263,26 @@ export async function redeemAsync(
   ) as `0x${string}`
 
   // amountLimit MUST be 0 for REDEEM — see JSDoc above
-  const { result: guid } = await publicClient.simulateContract({
-    address: vault,
-    abi: BRIDGE_ABI,
-    functionName: 'initVaultActionRequest',
-    args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
-    value: lzFee,
-    account: account.address,
-  })
+  const [{ result: guid }, gasEstimate] = await Promise.all([
+    publicClient.simulateContract({
+      address: vault,
+      abi: BRIDGE_ABI,
+      functionName: 'initVaultActionRequest',
+      args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
+      value: lzFee,
+      account: account.address,
+    }),
+    publicClient.estimateContractGas({
+      address: vault,
+      abi: BRIDGE_ABI,
+      functionName: 'initVaultActionRequest',
+      args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
+      value: lzFee,
+      account: account.address,
+    }),
+  ])
+
+  const gas = gasEstimate * 130n / 100n
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -280,6 +292,7 @@ export async function redeemAsync(
     value: lzFee,
     account,
     chain: walletClient.chain,
+    gas,
   })
 
   return { txHash, guid: guid as `0x${string}` }

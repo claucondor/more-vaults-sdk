@@ -201,14 +201,27 @@ export async function depositAsync(
     [assets, getAddress(receiver)],
   ) as `0x${string}`
 
-  const { result: guid } = await publicClient.simulateContract({
-    address: vault,
-    abi: BRIDGE_ABI,
-    functionName: 'initVaultActionRequest',
-    args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
-    value: lzFee,
-    account: account.address,
-  })
+  const [{ result: guid }, gasEstimate] = await Promise.all([
+    publicClient.simulateContract({
+      address: vault,
+      abi: BRIDGE_ABI,
+      functionName: 'initVaultActionRequest',
+      args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
+      value: lzFee,
+      account: account.address,
+    }),
+    publicClient.estimateContractGas({
+      address: vault,
+      abi: BRIDGE_ABI,
+      functionName: 'initVaultActionRequest',
+      args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
+      value: lzFee,
+      account: account.address,
+    }),
+  ])
+
+  // LZ Read operations consistently underestimate gas — add 30% buffer.
+  const gas = gasEstimate * 130n / 100n
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -218,6 +231,7 @@ export async function depositAsync(
     value: lzFee,
     account,
     chain: walletClient.chain,
+    gas,
   })
 
   return { txHash, guid: guid as `0x${string}` }
@@ -281,14 +295,26 @@ export async function mintAsync(
   ) as `0x${string}`
 
   // amountLimit = maxAssets (slippage check: actual assets spent must be <= maxAssets)
-  const { result: guid } = await publicClient.simulateContract({
-    address: vault,
-    abi: BRIDGE_ABI,
-    functionName: 'initVaultActionRequest',
-    args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
-    value: lzFee,
-    account: account.address,
-  })
+  const [{ result: guid }, gasEstimate] = await Promise.all([
+    publicClient.simulateContract({
+      address: vault,
+      abi: BRIDGE_ABI,
+      functionName: 'initVaultActionRequest',
+      args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
+      value: lzFee,
+      account: account.address,
+    }),
+    publicClient.estimateContractGas({
+      address: vault,
+      abi: BRIDGE_ABI,
+      functionName: 'initVaultActionRequest',
+      args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
+      value: lzFee,
+      account: account.address,
+    }),
+  ])
+
+  const gas = gasEstimate * 130n / 100n
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -298,6 +324,7 @@ export async function mintAsync(
     value: lzFee,
     account,
     chain: walletClient.chain,
+    gas,
   })
 
   return { txHash, guid: guid as `0x${string}` }
