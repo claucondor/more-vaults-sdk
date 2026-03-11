@@ -154,14 +154,25 @@ export async function canDeposit(
 ): Promise<DepositEligibility> {
   const v = getAddress(vault)
 
-  const isPaused = await publicClient.readContract({
-    address: v,
-    abi: CONFIG_ABI,
-    functionName: 'paused',
+  // Fetch paused + isHub + oraclesCrossChainAccounting in one batch
+  const [isPaused, isHub, oraclesEnabled] = await publicClient.multicall({
+    contracts: [
+      { address: v, abi: CONFIG_ABI,  functionName: 'paused' },
+      { address: v, abi: CONFIG_ABI,  functionName: 'isHub' },
+      { address: v, abi: BRIDGE_ABI,  functionName: 'oraclesCrossChainAccounting' },
+    ],
+    allowFailure: false,
   })
 
   if (isPaused) {
     return { allowed: false, reason: 'paused' }
+  }
+
+  // Cross-chain async hubs revert on maxDeposit — this is expected, not a whitelist block.
+  // The vault accepts deposits via initVaultActionRequest instead of the standard ERC-4626 path.
+  const isCrossChainAsync = isHub && !oraclesEnabled
+  if (isCrossChainAsync) {
+    return { allowed: true, reason: 'ok' }
   }
 
   // maxDeposit(user) can REVERT on vaults with whitelist/ACL
