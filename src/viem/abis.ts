@@ -389,4 +389,97 @@ export const OFT_ABI = [
     ],
     stateMutability: 'view',
   },
+  {
+    type: 'function',
+    name: 'token',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'peers',
+    inputs: [{ name: '_eid', type: 'uint32' }],
+    outputs: [{ name: '', type: 'bytes32' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'quoteOFT',
+    inputs: [
+      {
+        name: '_sendParam',
+        type: 'tuple',
+        components: [
+          { name: 'dstEid', type: 'uint32' },
+          { name: 'to', type: 'bytes32' },
+          { name: 'amountLD', type: 'uint256' },
+          { name: 'minAmountLD', type: 'uint256' },
+          { name: 'extraOptions', type: 'bytes' },
+          { name: 'composeMsg', type: 'bytes' },
+          { name: 'oftCmd', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [
+      {
+        name: 'oftLimit',
+        type: 'tuple',
+        components: [
+          { name: 'minAmountLD', type: 'uint256' },
+          { name: 'maxAmountLD', type: 'uint256' },
+        ],
+      },
+      {
+        name: 'oftFeeDetails',
+        type: 'tuple[]',
+        components: [
+          { name: 'feeAmountLD', type: 'int256' },
+          { name: 'description', type: 'string' },
+        ],
+      },
+      {
+        name: 'oftReceipt',
+        type: 'tuple',
+        components: [
+          { name: 'amountSentLD', type: 'uint256' },
+          { name: 'amountReceivedLD', type: 'uint256' },
+        ],
+      },
+    ],
+    stateMutability: 'view',
+  },
+] as const
+
+/**
+ * Minimal LZ Endpoint V2 ABI for compose queue management.
+ * Used by the Stargate 2-TX flow to check compose status and execute pending composes.
+ */
+export const LZ_ENDPOINT_ABI = [
+  {
+    type: 'function',
+    name: 'composeQueue',
+    inputs: [
+      { name: 'from', type: 'address' },
+      { name: 'to', type: 'address' },
+      { name: 'guid', type: 'bytes32' },
+      { name: 'index', type: 'uint16' },
+    ],
+    outputs: [{ name: 'messageHash', type: 'bytes32' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'lzCompose',
+    inputs: [
+      { name: '_from', type: 'address' },
+      { name: '_to', type: 'address' },
+      { name: '_guid', type: 'bytes32' },
+      { name: '_index', type: 'uint16' },
+      { name: '_message', type: 'bytes' },
+      { name: '_extraData', type: 'bytes' },
+    ],
+    outputs: [],
+    stateMutability: 'payable',
+  },
 ] as const

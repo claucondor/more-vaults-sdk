@@ -80,3 +80,8 @@ export const OFT_ABI = [
   "function send(tuple(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd) sendParam, tuple(uint256 nativeFee, uint256 lzTokenFee) fee, address refundAddress) payable returns (tuple(bytes32 guid, uint64 nonce, uint256 amountSentLD, uint256 amountReceivedLD) receipt, tuple(uint256 nativeFee, uint256 lzTokenFee) fee)",
   "function quoteSend(tuple(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd) sendParam, bool payInLzToken) view returns (tuple(uint256 nativeFee, uint256 lzTokenFee))",
 ] as const;
+
+export const LZ_ENDPOINT_ABI = [
+  "function composeQueue(address from, address to, bytes32 guid, uint16 index) view returns (bytes32 messageHash)",
+  "function lzCompose(address _from, address _to, bytes32 _guid, uint16 _index, bytes _message, bytes _extraData) payable",
+] as const;

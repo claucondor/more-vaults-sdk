@@ -221,6 +221,33 @@ export const OFT_ROUTES = {
  */
 export const STARGATE_TAXI_CMD = '0x01' as const
 
+/**
+ * Recommended timeouts for cross-chain operations (milliseconds).
+ *
+ * Based on real E2E tests:
+ * - Standard OFT bridge (non-Stargate): ~5-10 min
+ * - Stargate bridge: ~10-15 min, can reach 20 min under load
+ * - LZ Read callback (async deposit/redeem): ~5-10 min
+ * - Full spoke deposit (compose + oracle + share bridge): ~10-15 min
+ * - Full spoke redeem (share bridge + async redeem + asset bridge): ~25-30 min
+ *
+ * UIs should show a progress indicator and NOT timeout before these values.
+ */
+export const LZ_TIMEOUTS = {
+  /** Poll interval between balance/event checks */
+  POLL_INTERVAL: 30_000,
+  /** Standard OFT bridge (shares or assets, non-Stargate) */
+  OFT_BRIDGE: 900_000,          // 15 min
+  /** Stargate bridge (USDC, USDT, WETH) — slower due to pool mechanics */
+  STARGATE_BRIDGE: 1_800_000,   // 30 min
+  /** LZ Read callback (async vault actions) */
+  LZ_READ_CALLBACK: 900_000,   // 15 min
+  /** Compose delivery to hub (deposit from spoke) */
+  COMPOSE_DELIVERY: 2_700_000,  // 45 min
+  /** Full spoke→hub→spoke redeem (all steps combined) */
+  FULL_SPOKE_REDEEM: 3_600_000, // 60 min
+} as const
+
 // ---------------------------------------------------------------------------
 // Legacy flat exports — kept for backwards compat, prefer OFT_ROUTES
 // ---------------------------------------------------------------------------
