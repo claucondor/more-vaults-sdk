@@ -766,12 +766,18 @@ export async function quoteComposeFee(
  * @param fee              ETH to send (from quoteComposeFee). Covers readFee for D7.
  * @returns                Transaction hash of the compose execution
  */
+/**
+ * Event topic0 emitted by the escrow when initVaultActionRequest creates a new request.
+ * topic1 = GUID (bytes32). Used to extract the async request GUID from executeCompose receipts.
+ */
+const ESCROW_REQUEST_TOPIC = '0x304ac8b57de34b9e6118fb049ba362689cfcfab98c30c9d78e3e2e14be7e0972' as const
+
 export async function executeCompose(
   walletClient: WalletClient,
   hubPublicClient: PublicClient,
   composeData: ComposeData,
   fee: bigint,
-): Promise<{ txHash: Hash }> {
+): Promise<{ txHash: Hash; guid?: `0x${string}` }> {
   const account = walletClient.account!
   const endpoint = getAddress(composeData.endpoint)
 
@@ -811,5 +817,21 @@ export async function executeCompose(
     gas: 5_000_000n, // initVaultActionRequest + LZ Read is gas-heavy
   })
 
-  return { txHash }
+  // Parse the GUID from the escrow's event in the TX receipt.
+  // The composer calls initVaultActionRequest internally, which emits an event
+  // with topic1 = GUID. We need this GUID to poll finalization via waitForAsyncRequest.
+  let guid: `0x${string}` | undefined
+  try {
+    const receipt = await hubPublicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
+    for (const log of receipt.logs) {
+      if (log.topics[0] === ESCROW_REQUEST_TOPIC && log.topics[1]) {
+        guid = log.topics[1] as `0x${string}`
+        break
+      }
+    }
+  } catch {
+    // Receipt timeout — guid will be undefined, caller can still poll by balance
+  }
+
+  return { txHash, guid }
 }
