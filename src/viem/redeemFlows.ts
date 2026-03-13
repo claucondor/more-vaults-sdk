@@ -8,17 +8,20 @@ import {
   pad,
   zeroAddress,
 } from 'viem'
-import { VAULT_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI } from './abis'
+import { VAULT_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI, ERC20_ABI } from './abis'
 import type {
   VaultAddresses,
   RedeemResult,
   AsyncRequestResult,
 } from './types'
 import { ActionType } from './types'
-import { ensureAllowance } from './utils'
+import { ensureAllowance, getVaultStatus, quoteLzFee } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
 import { EscrowNotConfiguredError } from './errors'
 import { validateWalletChain } from './chainValidation'
+import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
+import { createChainClient } from './spokeRoutes'
+import { OMNI_FACTORY_ADDRESS } from './topology'
 
 /**
  * R1 — Simple share redemption (ERC-4626 standard).
@@ -299,22 +302,81 @@ export async function redeemAsync(
 }
 
 /**
+ * Smart redeem — auto-selects the correct flow based on vault configuration.
+ *
+ * Detects the vault mode and dispatches to:
+ * - Sync vaults (local / cross-chain-oracle): `redeemShares` (direct ERC-4626 redeem)
+ * - Async vaults (cross-chain, oracle OFF): `redeemAsync` (LZ Read flow, quotes fee automatically)
+ *
+ * ## Tested flows
+ *
+ * - [x] Hub-chain async redeem (Base→Base, vault 0x8f74...ba6):
+ *       smartRedeem auto-detects async → redeemAsync → LZ Read callback ~4.5 min.
+ *       TX: 0xd890c4...8b58c
+ *
+ * ## Untested flows
+ *
+ * - [ ] Hub-chain sync redeem (redeemShares path) — needs a vault with oracle ON
+ * - [ ] requestRedeem + withdrawAssets (withdrawal queue flow) — separate entry points
+ *
+ * @param walletClient   Wallet client with account attached
+ * @param publicClient   Public client for reads
+ * @param addresses      Vault address set (`escrow` required for async vaults)
+ * @param shares         Amount of shares to redeem
+ * @param receiver       Address that will receive the underlying assets
+ * @param owner          Owner of the shares being redeemed
+ * @param extraOptions   Optional LZ extra options (only used for async vaults)
+ * @returns              RedeemResult or AsyncRequestResult depending on vault mode
+ */
+export async function smartRedeem(
+  walletClient: WalletClient,
+  publicClient: PublicClient,
+  addresses: VaultAddresses,
+  shares: bigint,
+  receiver: Address,
+  owner: Address,
+  extraOptions: `0x${string}` = '0x',
+): Promise<RedeemResult | AsyncRequestResult> {
+  const vault = getAddress(addresses.vault)
+  const status = await getVaultStatus(publicClient, vault)
+
+  if (status.mode === 'paused') {
+    throw new Error(`[MoreVaults] Vault ${vault} is paused. Cannot redeem.`)
+  }
+
+  if (status.recommendedDepositFlow === 'depositAsync') {
+    // Async vault — use redeemAsync
+    const lzFee = await quoteLzFee(publicClient, vault, extraOptions)
+    return redeemAsync(walletClient, publicClient, addresses, shares, receiver, owner, lzFee, extraOptions)
+  }
+
+  // Sync vault — direct redeem
+  return redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
+}
+
+/**
  * R6 — Bridge shares from spoke to hub chain via OFT.
  *
- * This is step 1 of a 2-step spoke redeem flow:
- *   1. `bridgeSharesToHub()` — send shares from spoke to hub via OFT
- *   2. `redeemShares()` — call redeem on the hub vault (after shares arrive)
+ * This is step 1 of a cross-chain spoke redeem flow:
+ *   1. `bridgeSharesToHub()` — send shares from spoke → hub via SHARE_OFT
+ *   2. `smartRedeem()` — redeem shares on hub → underlying (auto-detects async)
+ *   3. `bridgeAssetsToSpoke()` — bridge assets from hub → spoke via asset OFT
  *
- * The two steps happen on different chains and cannot be combined into a single
- * SDK call. The frontend must switch chains between steps.
+ * The steps happen on different chains and cannot be combined.
+ * The frontend must switch chains between steps.
  *
  * **User transactions on spoke chain**: 1 approve (shares to shareOFT) + 1 OFT.send().
- * **Gas**: Requires native token on spoke for LZ fees, and gas on hub for step 2.
+ * **Gas**: Requires native token on spoke for LZ fees, and gas on hub for steps 2+3.
+ *
+ * ## Tested flows
+ *
+ * - [x] SHARE_OFT bridge (Eth→Base, vault 0x8f74...ba6):
+ *       Delivery ~7 min. Required enforcedOptions on Eth SHARE_OFT for dstEid=30184.
  *
  * @param walletClient   Wallet client on the SPOKE chain
  * @param publicClient   Public client on the SPOKE chain
  * @param shareOFT       OFTAdapter address for vault shares on the spoke chain
- * @param hubChainEid    LayerZero Endpoint ID for the hub chain (Flow EVM = 30336)
+ * @param hubChainEid    LayerZero Endpoint ID for the hub chain
  * @param shares         Amount of vault shares to bridge
  * @param receiver       Receiver address on the HUB chain
  * @param lzFee          msg.value for OFT send (quote via OFT.quoteSend)
@@ -363,4 +425,239 @@ export async function bridgeSharesToHub(
   })
 
   return { txHash }
+}
+
+/**
+ * R7 — Bridge underlying assets from hub back to spoke chain via OFT.
+ *
+ * This is the final step of a full spoke redeem flow:
+ *   1. `bridgeSharesToHub()` — send shares from spoke → hub via SHARE_OFT
+ *   2. `smartRedeem()` — redeem shares on hub → underlying assets (e.g. USDC)
+ *   3. `bridgeAssetsToSpoke()` — bridge assets from hub → spoke via OFT
+ *
+ * For Stargate OFTs (stgUSDC, USDT, WETH), uses TAXI mode (oftCmd 0x01) for
+ * immediate delivery. For non-Stargate OFTs, uses empty oftCmd (0x).
+ *
+ * **User transactions on hub chain**: 1 approve (assets to OFT) + 1 OFT.send().
+ * **Gas**: Requires native token on hub for LZ fees.
+ *
+ * ## Tested flows
+ *
+ * - [x] Stargate OFT bridge (Base→Eth, stgUSDC, TAXI mode 0x01):
+ *       Delivery ~13 min. TX: 0x... (see redeem-async-hub.ts test)
+ *
+ * ## Untested flows
+ *
+ * - [ ] Standard OFT bridge (non-Stargate, oftCmd 0x) — needs non-Stargate asset vault
+ *
+ * @param walletClient   Wallet client on the HUB chain
+ * @param publicClient   Public client on the HUB chain
+ * @param assetOFT       OFT address for the underlying asset on the hub chain
+ * @param spokeChainEid  LayerZero Endpoint ID for the spoke (destination) chain
+ * @param amount         Amount of underlying assets to bridge
+ * @param receiver       Receiver address on the SPOKE chain
+ * @param lzFee          msg.value for OFT send (quote via OFT.quoteSend)
+ * @param isStargate     Whether this is a Stargate OFT (uses TAXI mode)
+ * @returns              Transaction hash of the OFT.send() call
+ */
+export async function bridgeAssetsToSpoke(
+  walletClient: WalletClient,
+  publicClient: PublicClient,
+  assetOFT: Address,
+  spokeChainEid: number,
+  amount: bigint,
+  receiver: Address,
+  lzFee: bigint,
+  isStargate: boolean = true,
+): Promise<{ txHash: Hash }> {
+  const account = walletClient.account!
+  const oft = getAddress(assetOFT)
+
+  // Read underlying token and approve if different from OFT
+  const token = await publicClient.readContract({
+    address: oft,
+    abi: OFT_ABI,
+    functionName: 'token',
+  })
+
+  if (getAddress(token) !== oft) {
+    // OFTAdapter pattern: approve underlying token to OFT
+    await ensureAllowance(walletClient, publicClient, token, oft, amount)
+  } else {
+    // Pure OFT: approve OFT to itself
+    await ensureAllowance(walletClient, publicClient, oft, oft, amount)
+  }
+
+  const toBytes32 = pad(getAddress(receiver), { size: 32 })
+
+  const sendParam = {
+    dstEid: spokeChainEid,
+    to: toBytes32,
+    amountLD: amount,
+    minAmountLD: amount * 99n / 100n, // 1% slippage tolerance for Stargate
+    extraOptions: '0x' as `0x${string}`,
+    composeMsg: '0x' as `0x${string}`,
+    oftCmd: (isStargate ? '0x01' : '0x') as `0x${string}`,
+  }
+
+  const fee = {
+    nativeFee: lzFee,
+    lzTokenFee: 0n,
+  }
+
+  const txHash = await walletClient.writeContract({
+    address: oft,
+    abi: OFT_ABI,
+    functionName: 'send',
+    args: [sendParam, fee, account.address],
+    value: lzFee,
+    account,
+    chain: walletClient.chain,
+  })
+
+  return { txHash }
+}
+
+export interface SpokeRedeemRoute {
+  /** Hub chain ID */
+  hubChainId: number
+  /** Spoke chain ID */
+  spokeChainId: number
+  /** LZ EID for the hub */
+  hubEid: number
+  /** LZ EID for the spoke */
+  spokeEid: number
+  /** Vault underlying asset address on hub (e.g. USDC on Base) */
+  hubAsset: Address
+  /** SHARE_OFT on spoke chain (user has shares here) */
+  spokeShareOft: Address
+  /** Asset OFT on hub for bridging back (e.g. Stargate USDC pool on Base) */
+  hubAssetOft: Address
+  /** Underlying asset address on spoke chain (e.g. USDC on Ethereum) */
+  spokeAsset: Address
+  /** Whether the asset OFT is a Stargate pool (determines oftCmd) */
+  isStargate: boolean
+  /** OFT route symbol (e.g. 'stgUSDC') */
+  symbol: string
+}
+
+const STARGATE_ASSETS = new Set(['stgUSDC', 'USDT', 'WETH'])
+
+const FACTORY_COMPOSER_ABI = [
+  {
+    type: 'function' as const,
+    name: 'vaultComposer' as const,
+    inputs: [{ name: '_vault', type: 'address' as const }] as const,
+    outputs: [{ name: '', type: 'address' as const }] as const,
+    stateMutability: 'view' as const,
+  },
+] as const
+
+const REDEEM_COMPOSER_ABI = [
+  {
+    type: 'function' as const,
+    name: 'SHARE_OFT' as const,
+    inputs: [] as const,
+    outputs: [{ name: '', type: 'address' as const }] as const,
+    stateMutability: 'view' as const,
+  },
+] as const
+
+/**
+ * Resolve all addresses needed for a full spoke→hub→spoke redeem flow.
+ *
+ * Discovers dynamically:
+ * - SHARE_OFT on the spoke chain (via hub composer → peers)
+ * - Asset OFT on the hub chain (matches vault.asset() to OFT_ROUTES)
+ * - Underlying asset on the spoke chain
+ *
+ * @param hubPublicClient  Public client on the HUB chain
+ * @param vault            Vault address
+ * @param hubChainId       Hub chain ID
+ * @param spokeChainId     Spoke chain ID where user has shares
+ * @returns                All addresses needed for bridgeSharesToHub + redeemShares + bridgeAssetsToSpoke
+ */
+export async function resolveRedeemAddresses(
+  hubPublicClient: PublicClient,
+  vault: Address,
+  hubChainId: number,
+  spokeChainId: number,
+): Promise<SpokeRedeemRoute> {
+  const v = getAddress(vault)
+  const hubEid = CHAIN_ID_TO_EID[hubChainId]
+  const spokeEid = CHAIN_ID_TO_EID[spokeChainId]
+  if (!hubEid || !spokeEid) throw new Error(`No LZ EID for chainId ${!hubEid ? hubChainId : spokeChainId}`)
+
+  // Read vault asset and composer address in parallel
+  const [hubAsset, composerAddress] = await Promise.all([
+    hubPublicClient.readContract({ address: v, abi: VAULT_ABI, functionName: 'asset' }) as Promise<Address>,
+    hubPublicClient.readContract({
+      address: OMNI_FACTORY_ADDRESS,
+      abi: FACTORY_COMPOSER_ABI,
+      functionName: 'vaultComposer',
+      args: [v],
+    }) as Promise<Address>,
+  ])
+
+  if (composerAddress === zeroAddress) {
+    throw new Error(`[MoreVaults] No composer registered for vault ${vault} on hub chain ${hubChainId}`)
+  }
+
+  // Read SHARE_OFT from composer
+  const hubShareOft = await hubPublicClient.readContract({
+    address: composerAddress,
+    abi: REDEEM_COMPOSER_ABI,
+    functionName: 'SHARE_OFT',
+  }) as Address
+
+  // Get spoke SHARE_OFT via peers(spokeEid) on hub SHARE_OFT
+  const spokeShareOftBytes32 = await hubPublicClient.readContract({
+    address: hubShareOft,
+    abi: OFT_ABI,
+    functionName: 'peers',
+    args: [spokeEid],
+  }) as `0x${string}`
+
+  // Convert bytes32 to address (last 20 bytes)
+  const spokeShareOft = getAddress(`0x${spokeShareOftBytes32.slice(-40)}`) as Address
+
+  // Find matching OFT route for the vault's asset on the hub chain
+  let hubAssetOft: Address | null = null
+  let spokeAsset: Address | null = null
+  let isStargate = false
+  let symbol = ''
+
+  for (const [sym, chainMap] of Object.entries(OFT_ROUTES)) {
+    const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
+    const spokeEntry = (chainMap as Record<number, { oft: string; token: string }>)[spokeChainId]
+    if (!hubEntry || !spokeEntry) continue
+
+    if (getAddress(hubEntry.token) === getAddress(hubAsset)) {
+      hubAssetOft = getAddress(hubEntry.oft) as Address
+      spokeAsset = getAddress(spokeEntry.token) as Address
+      isStargate = STARGATE_ASSETS.has(sym)
+      symbol = sym
+      break
+    }
+  }
+
+  if (!hubAssetOft || !spokeAsset) {
+    throw new Error(
+      `[MoreVaults] No OFT route found for vault asset ${hubAsset} ` +
+      `between hub chain ${hubChainId} and spoke chain ${spokeChainId}`,
+    )
+  }
+
+  return {
+    hubChainId,
+    spokeChainId,
+    hubEid,
+    spokeEid,
+    hubAsset,
+    spokeShareOft,
+    hubAssetOft,
+    spokeAsset,
+    isStargate,
+    symbol,
+  }
 }

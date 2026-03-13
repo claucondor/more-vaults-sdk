@@ -335,8 +335,19 @@ export async function mintAsync(
  *
  * Calls getVaultStatus internally to determine the vault mode, then dispatches
  * to the appropriate flow:
- * - local / cross-chain-oracle → depositSimple
- * - cross-chain-async → depositAsync (quotes LZ fee automatically)
+ * - local / cross-chain-oracle → depositSimple (ERC-4626 deposit)
+ * - cross-chain-async → depositAsync (initVaultActionRequest + LZ Read callback)
+ *
+ * ## Tested flows
+ *
+ * - [x] Hub-chain async deposit (Base→Base, vault 0x8f74...ba6):
+ *       smartDeposit auto-detects async → depositAsync → LZ Read callback ~4.5 min.
+ *       TX: 0x5284b4...ca24
+ *
+ * ## Untested flows
+ *
+ * - [ ] Hub-chain sync deposit (depositSimple path) — needs a vault with oracle ON
+ * - [ ] Multi-asset deposit (depositMultiAsset) — separate entry point, not dispatched here
  *
  * @param walletClient   Wallet client with account attached
  * @param publicClient   Public client for reads
