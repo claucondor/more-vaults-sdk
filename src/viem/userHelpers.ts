@@ -625,16 +625,28 @@ export async function getUserPositionMultiChain(
             return { chainId: spokeChainId, balance: 0n }
           }
 
-          // Read balance on spoke chain
+          // Read balance + decimals on spoke chain
           const spokeClient = createChainClient(spokeChainId)
           if (!spokeClient) return { chainId: spokeChainId, balance: 0n }
 
-          const balance = await (spokeClient as PublicClient).readContract({
-            address: spokeOft,
-            abi: ERC20_ABI,
-            functionName: 'balanceOf',
-            args: [u],
+          const [rawBalance, spokeOftDecimals] = await (spokeClient as PublicClient).multicall({
+            contracts: [
+              { address: spokeOft, abi: ERC20_ABI, functionName: 'balanceOf', args: [u] },
+              { address: spokeOft, abi: METADATA_ABI, functionName: 'decimals' },
+            ],
+            allowFailure: false,
           })
+
+          // Normalize SHARE_OFT balance to vault decimals
+          // Spoke OFTs may use different decimals (e.g. 18) than the vault shares (e.g. 8)
+          let balance: bigint
+          if (spokeOftDecimals > decimals) {
+            balance = rawBalance / (10n ** BigInt(spokeOftDecimals - decimals))
+          } else if (spokeOftDecimals < decimals) {
+            balance = rawBalance * (10n ** BigInt(decimals - spokeOftDecimals))
+          } else {
+            balance = rawBalance
+          }
 
           return { chainId: spokeChainId, balance }
         } catch {
