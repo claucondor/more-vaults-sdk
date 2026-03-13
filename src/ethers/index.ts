@@ -26,6 +26,7 @@ export {
   ERC20_ABI,
   OFT_ABI,
   METADATA_ABI,
+  LZ_ENDPOINT_ABI,
 } from "./abis";
 
 // --- Errors ---
@@ -57,6 +58,8 @@ export {
   depositFromSpoke,
   depositFromSpokeAsync,
   quoteDepositFromSpokeFee,
+  quoteComposeFee,
+  executeCompose,
 } from "./crossChainFlows";
 
 // --- Redeem flows ---

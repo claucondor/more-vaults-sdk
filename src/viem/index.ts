@@ -2,7 +2,7 @@
 // Provides typed helpers for all deposit, redeem, and cross-chain vault flows.
 
 // --- Chain constants ---
-export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, OFT_ROUTES, STARGATE_TAXI_CMD, USDC_STARGATE_OFT, USDC_TOKEN } from './chains'
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, OFT_ROUTES, STARGATE_TAXI_CMD, USDC_STARGATE_OFT, USDC_TOKEN, LZ_TIMEOUTS } from './chains'
 
 // --- ABIs ---
 export {
@@ -12,6 +12,7 @@ export {
   ERC20_ABI,
   OFT_ABI,
   METADATA_ABI,
+  LZ_ENDPOINT_ABI,
 } from './abis'
 
 // --- Types ---
@@ -22,6 +23,8 @@ export type {
   AsyncRequestResult,
   CrossChainRequestInfo,
   ActionTypeValue,
+  ComposeData,
+  SpokeDepositResult,
 } from './types'
 export { ActionType } from './types'
 
@@ -54,6 +57,9 @@ export {
   depositFromSpoke,
   depositFromSpokeAsync,
   quoteDepositFromSpokeFee,
+  waitForCompose,
+  quoteComposeFee,
+  executeCompose,
 } from './crossChainFlows'
 
 // --- Redeem Flows ---
@@ -63,12 +69,17 @@ export {
   requestRedeem,
   getWithdrawalRequest,
   redeemAsync,
+  smartRedeem,
   bridgeSharesToHub,
+  bridgeAssetsToSpoke,
+  resolveRedeemAddresses,
 } from './redeemFlows'
+export type { SpokeRedeemRoute } from './redeemFlows'
 
 // --- Utilities ---
 export {
   ensureAllowance,
+  waitForTx,
   quoteLzFee,
   isAsyncMode,
   getAsyncRequestStatus,
@@ -77,7 +88,7 @@ export {
 export type { VaultStatus, VaultMode } from './utils'
 
 // --- Pre-flight validation ---
-export { preflightSync, preflightAsync, preflightRedeemLiquidity } from './preflight'
+export { preflightSync, preflightAsync, preflightRedeemLiquidity, preflightSpokeDeposit, preflightSpokeRedeem } from './preflight'
 
 // --- User Helpers ---
 export {
