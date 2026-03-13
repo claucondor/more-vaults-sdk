@@ -3,4 +3,5 @@ dist/
 *.js.map
 tests/addresses.json
 .env
+.npmrc
 _*.ts
