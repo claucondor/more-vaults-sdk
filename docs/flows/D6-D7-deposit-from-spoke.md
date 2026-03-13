@@ -14,6 +14,33 @@ Deposit from a spoke chain (e.g. Arbitrum, Base, Ethereum) into the hub vault vi
 
 The difference is handled server-side by the hub's MoreVaultsComposer contract. The user calls the same function either way.
 
+## Stargate OFT vs Standard OFT
+
+The SDK auto-detects the OFT type via `isStargateOft()` and handles them differently:
+
+| | Stargate OFT (stgUSDC, USDT, WETH) | Standard OFT |
+|--|--|--|
+| `extraOptions` | `'0x'` — Stargate rejects LZCOMPOSE type-3 options | LZCOMPOSE option injected with native ETH value |
+| Compose execution | Stays **pending** in LZ Endpoint's `composeQueue` | Auto-executed by LZ executor in **1 TX** |
+| User transactions | **2 TX** — spoke `OFT.send()` + hub `executeCompose()` | **1 TX** — spoke `OFT.send()` only |
+| `composeData` returned | Yes — caller must handle | `undefined` — no retry needed |
+
+### Stargate 2-TX flow
+
+```
+TX1 (Spoke):  depositFromSpoke()       → returns { txHash, guid, composeData }
+Wait:         waitForCompose()          → polls ComposeSent events (~5-15 min)
+TX2 (Hub):    executeCompose()          → triggers composer deposit + share return
+Wait:         Shares arrive on spoke    (~5-10 min)
+```
+
+### Standard OFT 1-TX flow
+
+```
+TX1 (Spoke):  depositFromSpoke()       → returns { txHash, guid, composeData: undefined }
+Wait:         Shares arrive on spoke   (~5-15 min, automatic)
+```
+
 ## What happens on-chain
 
 ```
@@ -29,24 +56,22 @@ Spoke chain                         LayerZero                Hub chain
      |   (~1-5 min)                     |                          |
 ```
 
-1. **Approve spokeOFT**: underlying tokens are approved to the OFT contract on the spoke chain.
-2. **OFT.send()**: sends tokens to the hub chain with a `composeMsg` attached. The composeMsg encodes `abi.encode(SendParam hopSendParam, uint256 minMsgValue)` — `hopSendParam` tells the hub where to send shares back.
-3. **Hub composer** (automatic): receives tokens + composeMsg, calls `vault.deposit()` (D6) or `vault.initDeposit()` (D7).
-4. **Shares bridged back** (D6): after minting, the hub sends shares back to the receiver on the spoke chain via OFT.
-
 ## LZ fee quoting
 
-You must quote the LZ fee before calling this function. The fee covers delivery on the hub side:
+Use the SDK helper to quote the LZ fee:
 
 ```ts
-// On the spoke chain, call OFT.quoteSend() with your sendParam
-const [nativeFee] = await publicClient.readContract({
-  address: SPOKE_OFT,
-  abi: OFT_ABI,
-  functionName: 'quoteSend',
-  args: [sendParam, false],
-})
-const lzFee = nativeFee
+import { quoteDepositFromSpokeFee } from '@oydual31/more-vaults-sdk/viem'
+
+const lzFee = await quoteDepositFromSpokeFee(
+  spokePublicClient,
+  VAULT_ADDRESS,
+  SPOKE_OFT,
+  hubEid,
+  spokeEid,
+  amount,
+  receiver,
+)
 ```
 
 ## Parameters
@@ -55,88 +80,117 @@ const lzFee = nativeFee
 |-----------|------|-------------|
 | `walletClient` | `WalletClient` | Wallet client on the **spoke** chain |
 | `publicClient` | `PublicClient` | Public client on the **spoke** chain |
-| `spokeOFT` | `Address` | OFT contract for the underlying token on the spoke chain (e.g. USDC OFT on Arbitrum) |
-| `hubEid` | `number` | LayerZero Endpoint ID for the hub chain (Flow EVM = **30332**) |
-| `spokeEid` | `number` | LayerZero Endpoint ID for the spoke chain — where shares are sent back (Arbitrum = **30110**, Base = **30184**) |
+| `vault` | `Address` | Vault address (used to resolve hub-side composer) |
+| `spokeOFT` | `Address` | OFT contract for the underlying token on the spoke chain |
+| `hubEid` | `number` | LayerZero Endpoint ID for the hub chain |
+| `spokeEid` | `number` | LayerZero Endpoint ID for the spoke chain — where shares are sent back |
 | `amount` | `bigint` | Token amount in spoke-chain decimals |
 | `receiver` | `Address` | Address that receives shares on the spoke chain |
-| `lzFee` | `bigint` | Native fee from `OFT.quoteSend()`. Must cover both the hub-bound message AND the return (shares back) message. |
-| `minMsgValue` | `bigint` | Optional: minimum ETH the hub composer must receive to process the compose and send shares back. Default `0n`. |
-| `minSharesOut` | `bigint` | Optional: minimum vault shares to receive (slippage protection on deposit). Default `0n`. |
-| `minAmountLD` | `bigint` | Optional: minimum tokens received on hub after bridge slippage. Defaults to `amount` (zero bridge slippage tolerance). |
-| `extraOptions` | `0x${string}` | Optional: LZ extra options for the hub-bound message. Default `'0x'`. |
+| `lzFee` | `bigint` | Native fee from `quoteDepositFromSpokeFee()` |
+| `minMsgValue` | `bigint` | Optional: minimum ETH the hub composer must receive. Default `0n`. |
+| `minSharesOut` | `bigint` | Optional: minimum vault shares to receive (slippage). Default `0n`. |
+| `minAmountLD` | `bigint` | Optional: minimum tokens on hub after bridge. Auto-resolved via `quoteOFT`. |
+| `extraOptions` | `0x${string}` | Optional: LZ extra options. Auto-resolved by SDK. Default `'0x'`. |
 
 ## Returns
 
 ```ts
-{ txHash: Hash }
+interface SpokeDepositResult {
+  txHash: Hash
+  guid: `0x${string}`
+  composeData?: ComposeData  // present only for Stargate OFTs (2-TX flow)
+}
 ```
-
-(No shares returned — they arrive asynchronously via OFT delivery.)
 
 ## Usage
 
-### viem
+### viem — Stargate OFT (2-TX flow)
 
 ```ts
-import { depositFromSpoke } from '@oydual31/more-vaults-sdk/viem'
-import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
-import { arbitrum } from 'viem/chains'
+import {
+  depositFromSpoke,
+  quoteDepositFromSpokeFee,
+  waitForCompose,
+  quoteComposeFee,
+  executeCompose,
+  LZ_TIMEOUTS,
+} from '@oydual31/more-vaults-sdk/viem'
 
-// Clients must be on the SPOKE chain
-const spokePublic = createPublicClient({ chain: arbitrum, transport: http(ARB_RPC) })
-const spokeWallet = createWalletClient({ account, chain: arbitrum, transport: http(ARB_RPC) })
-
-const HUB_EID   = 30332  // Flow EVM
-const SPOKE_EID = 30110  // Arbitrum
-const USDC_OFT_ARBITRUM = '0x...' // USDC OFT on Arbitrum
-
-// Quote LZ fee first (call OFT.quoteSend on spoke with compose enabled)
-const lzFee = ... // from OFT.quoteSend()
-
-const { txHash } = await depositFromSpoke(
-  spokeWallet,
-  spokePublic,
-  USDC_OFT_ARBITRUM,
-  HUB_EID,
-  SPOKE_EID,
-  parseUnits('100', 6),
-  account.address,
-  lzFee,
-  // minMsgValue, minSharesOut, minAmountLD, extraOptions — all optional
+// TX1: Deposit from spoke
+const lzFee = await quoteDepositFromSpokeFee(
+  spokePublic, VAULT, USDC_OFT_ETH, HUB_EID, SPOKE_EID, amount, receiver,
 )
 
-// Shares arrive on spoke chain after LayerZero delivery (~1-5 min for D6)
+const result = await depositFromSpoke(
+  spokeWallet, spokePublic, VAULT, USDC_OFT_ETH,
+  HUB_EID, SPOKE_EID, amount, receiver, lzFee,
+)
+
+if (result.composeData) {
+  // Stargate: need TX2 on hub
+  // Wait for compose to arrive
+  const compose = await waitForCompose(
+    hubPublic, result.composeData, receiver,
+    LZ_TIMEOUTS.POLL_INTERVAL, LZ_TIMEOUTS.COMPOSE_DELIVERY,
+  )
+
+  // Quote and execute compose
+  const fee = await quoteComposeFee(hubPublic, VAULT, SPOKE_EID, receiver)
+  const { txHash: tx2 } = await executeCompose(hubWallet, hubPublic, compose, fee)
+
+  // Wait for shares to arrive on spoke via LZ
+} else {
+  // Standard OFT: compose auto-executed, just wait for shares
+}
+```
+
+### viem — Standard OFT (1-TX flow)
+
+```ts
+import { depositFromSpoke, quoteDepositFromSpokeFee } from '@oydual31/more-vaults-sdk/viem'
+
+const lzFee = await quoteDepositFromSpokeFee(
+  spokePublic, VAULT, CUSTOM_OFT, HUB_EID, SPOKE_EID, amount, receiver,
+)
+
+const { txHash, guid } = await depositFromSpoke(
+  spokeWallet, spokePublic, VAULT, CUSTOM_OFT,
+  HUB_EID, SPOKE_EID, amount, receiver, lzFee,
+)
+
+// composeData is undefined — compose auto-executes
+// Just wait for shares to arrive on spoke
 ```
 
 ### ethers.js
 
 ```ts
-import { depositFromSpoke } from '@oydual31/more-vaults-sdk/ethers'
+import { depositFromSpoke, quoteDepositFromSpokeFee } from '@oydual31/more-vaults-sdk/ethers'
 import { JsonRpcProvider, Wallet, parseUnits } from 'ethers'
 
 const spokeProvider = new JsonRpcProvider(ARB_RPC)
 const spokeSigner = new Wallet(PRIVATE_KEY, spokeProvider)
 
+const lzFee = await quoteDepositFromSpokeFee(
+  spokeProvider, VAULT, USDC_OFT, HUB_EID, SPOKE_EID, amount, receiver,
+)
+
 const { receipt } = await depositFromSpoke(
-  spokeSigner,
-  USDC_OFT_ARBITRUM,
-  30332,  // hubEid (Flow EVM)
-  30110,  // spokeEid (Arbitrum)
-  parseUnits('100', 6),
-  spokeSigner.address,
-  lzFee,
+  spokeSigner, VAULT, USDC_OFT, HUB_EID, SPOKE_EID, amount, receiver, lzFee,
 )
 ```
 
 ## Important notes
 
 - **Clients must be on the spoke chain**, not the hub chain.
-- The `receiver` gets shares on the **spoke chain** (identified by `spokeEid`). Shares are bridged back automatically by the hub composer after the deposit.
-- Bridge slippage is separate from vault slippage. `minAmountLD` controls bridge slippage; `minSharesOut` controls vault slippage (mapped to `hopSendParam.minAmountLD` in the composeMsg).
-- If the hub-side composer call fails (e.g. vault paused), the tokens may be stuck in the escrow. Contact the vault admin.
+- The `receiver` gets shares on the **spoke chain** (identified by `spokeEid`).
+- The SDK auto-resolves the composer address via `OMNI_FACTORY.vaultComposer(vault)`.
+- For Stargate OFTs, the hub-side compose requires ETH for `readFee` + `SHARE_OFT.send()` fee. Use `quoteComposeFee()` to estimate.
+- Bridge slippage (`minAmountLD`) is auto-resolved via `quoteOFT` if not provided.
 
 ## See also
 
-- [R6 — bridgeSharesToHub](./R6-bridge-shares-to-hub.md) — reverse: bridge shares from spoke to hub for redemption
+- [R6 — bridgeSharesToHub](./R6-bridge-shares-to-hub.md) — reverse: bridge shares from spoke to hub
+- [R7 — bridgeAssetsToSpoke](./R7-bridge-assets-to-spoke.md) — bridge assets back to spoke
 - [D4 — depositAsync](./D4-deposit-async.md) — deposit from hub when oracle is OFF
+- [Cross-chain async deposit architecture](../cross-chain-async-deposit-flow.md)

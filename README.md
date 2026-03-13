@@ -8,10 +8,10 @@ npm install @oydual31/more-vaults-sdk
 
 ```ts
 // viem / wagmi
-import { getVaultStatus, smartDeposit, getUserBalances } from '@oydual31/more-vaults-sdk/viem'
+import { smartDeposit, smartRedeem, getVaultStatus } from '@oydual31/more-vaults-sdk/viem'
 
 // ethers.js v6
-import { getVaultStatus, smartDeposit, getUserBalances } from '@oydual31/more-vaults-sdk/ethers'
+import { getVaultStatus, depositSimple } from '@oydual31/more-vaults-sdk/ethers'
 ```
 
 ---
@@ -44,8 +44,8 @@ Redeem 100 shares →  receive 105 USDC
 
 MoreVaults uses a **hub-and-spoke** model for cross-chain yield:
 
-- **Hub** (`isHub = true`): the chain where the vault does its accounting — mints/burns shares, accepts deposits and redemptions. All SDK flows target the hub. Flow EVM is the current reference deployment, but any EVM chain can be the hub.
-- **Spoke**: a position on another chain (Arbitrum, Base, etc.) where the vault has deployed funds for yield. Users on spoke chains bridge tokens to the hub via LayerZero OFT — they never interact with the spoke contracts directly.
+- **Hub** (`isHub = true`): the chain where the vault does its accounting — mints/burns shares, accepts deposits and redemptions. All SDK flows target the hub.
+- **Spoke**: a position on another chain (Arbitrum, Base, Ethereum, etc.) where the vault has deployed funds for yield. Users on spoke chains bridge tokens to the hub via LayerZero OFT.
 
 If a vault has `isHub = false`, it is a single-chain vault — no cross-chain flows apply, use D1/R1.
 
@@ -79,11 +79,6 @@ This means:
 
 **Repatriation** is the process of moving funds from spokes back to the hub so they become liquid again. This is a **manual, curator-only operation** (`executeBridging`). There is no automatic mechanism — the protocol does not pull funds from spokes on behalf of users.
 
-If a redeem fails because the hub is under-funded:
-1. The user's shares are returned automatically (or the tx reverts before any state change for R1).
-2. The vault curator must repatriate liquidity from the spokes.
-3. The user retries the redeem once sufficient liquidity is available on the hub.
-
 ### Withdrawal queue and timelock
 
 Some vaults require shares to be "queued" before redemption:
@@ -107,9 +102,7 @@ const escrow = status.escrow // address(0) if not configured
 
 ### Same address on every chain (CREATE3)
 
-MoreVaults deploys all contracts using **CREATE3**, which means a vault has the **same address on every chain** where it exists. If the hub vault on Flow EVM is `0xABC...`, the corresponding escrow and spoke-side contracts are also at predictable, identical addresses across Arbitrum, Base, etc.
-
-This simplifies the frontend significantly — you don't need a separate address map per chain. One address identifies the vault everywhere.
+MoreVaults deploys all contracts using **CREATE3**, which means a vault has the **same address on every chain** where it exists. If the hub vault on Base is `0xABC...`, the corresponding escrow and spoke-side contracts are also at predictable, identical addresses across Arbitrum, Ethereum, etc.
 
 ### VaultAddresses
 
@@ -118,13 +111,12 @@ Every flow function takes a `VaultAddresses` object:
 ```ts
 interface VaultAddresses {
   vault: Address      // Vault address — same on every chain (CREATE3)
-  escrow: Address     // MoreVaultsEscrow — same address as vault on each chain, required for D4, D5, R5
-  shareOFT?: Address  // OFTAdapter for vault shares — required for R6 (spoke redeem)
-  usdcOFT?: Address   // OFT for the underlying token on the spoke — required for D6/D7
+  escrow?: Address    // MoreVaultsEscrow — required for D4, D5, R5 (auto-resolved if omitted)
+  hubChainId?: number // Optional chain validation
 }
 ```
 
-For simple hub flows (D1, R1) you only need `vault`. For async flows you also need `escrow` — get it from `getVaultStatus(publicClient, vault).escrow`. For cross-chain flows from a spoke you also need the OFT addresses for that specific spoke chain.
+For simple hub flows (D1, R1) you only need `vault`. For async flows the SDK auto-resolves the escrow from the vault if not provided.
 
 ### LayerZero EID
 
@@ -132,10 +124,10 @@ LayerZero identifies chains by an **Endpoint ID (EID)** — different from the c
 
 | Chain | Chain ID | LayerZero EID |
 |-------|----------|---------------|
-| Flow EVM | 747 | 30332 |
+| Ethereum | 1 | 30101 |
 | Arbitrum | 42161 | 30110 |
 | Base | 8453 | 30184 |
-| Ethereum | 1 | 30101 |
+| Flow EVM | 747 | 30332 |
 
 ### GUID (async request ID)
 
@@ -147,7 +139,6 @@ const { guid } = await depositAsync(...)
 // Poll status
 const info = await getAsyncRequestStatusLabel(publicClient, vault, guid)
 // info.status: 'pending' | 'ready-to-execute' | 'completed' | 'refunded'
-// info.result: shares minted or assets received once completed
 ```
 
 ---
@@ -177,88 +168,126 @@ const { data: walletClient } = useWalletClient()
 | `new BrowserProvider(window.ethereum).getSigner()` | Browser — MetaMask or any injected wallet |
 | `new Wallet(PRIVATE_KEY, new JsonRpcProvider(RPC_URL))` | Node.js — scripts, bots, backends |
 
-Read-only helpers (`getUserPosition`, `previewDeposit`, etc.) accept a bare `Provider` in the ethers version — no signer needed.
-
 > The client's chain must match the chain where the vault lives. Hub flows → the hub chain. Spoke deposit/redeem (D6/D7/R6) → the spoke chain.
 
 ---
 
-## Quick start
+## Quick start — Smart flows (recommended)
+
+The simplest way to use the SDK. `smartDeposit` and `smartRedeem` auto-detect the vault type and use the correct flow.
 
 ### viem / wagmi
 
 ```ts
-import { getVaultStatus, depositSimple, getUserPosition } from '@oydual31/more-vaults-sdk/viem'
+import { smartDeposit, smartRedeem, getVaultStatus, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
+import { base } from 'viem/chains'
 
-const publicClient = createPublicClient({ chain: flowEvm, transport: http(RPC_URL) })
-const walletClient = createWalletClient({ account, chain: flowEvm, transport: http(RPC_URL) })
+const publicClient = createPublicClient({ chain: base, transport: http(RPC_URL) })
+const walletClient = createWalletClient({ account, chain: base, transport: http(RPC_URL) })
 
-// 1. Check vault status to know which flow to use
-const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
-// status.mode → 'local' | 'cross-chain-oracle' | 'cross-chain-async' | 'paused' | 'full'
-// status.recommendedDepositFlow → 'depositSimple' | 'depositAsync' | 'none'
-// status.escrow → escrow address (needed for async flows)
+const VAULT = '0x8f740aba022b3fcc934ab75c581c04b75e72aba6'
 
-const addresses = { vault: VAULT_ADDRESS, escrow: status.escrow }
-
-// 2. Deposit
-const { txHash, shares } = await depositSimple(
-  walletClient, publicClient, addresses,
+// --- Deposit ---
+const depositResult = await smartDeposit(
+  walletClient, publicClient,
+  { vault: VAULT },
   parseUnits('100', 6), // 100 USDC
   account.address,
 )
 
-// 3. Read position
-const position = await getUserPosition(publicClient, VAULT_ADDRESS, account.address)
-console.log('Shares:', position.shares)
-console.log('Value:', position.estimatedAssets)
-```
+// Check if async (LZ Read callback needed)
+if ('guid' in depositResult) {
+  console.log('Async deposit — waiting for LZ callback (~5 min)')
+  console.log('GUID:', depositResult.guid)
+  // Poll for shares using LZ_TIMEOUTS.LZ_READ_CALLBACK as timeout
+} else {
+  console.log('Sync deposit — shares:', depositResult.shares)
+}
 
-### ethers.js
-
-```ts
-import { getVaultStatus, depositSimple, getUserPosition } from '@oydual31/more-vaults-sdk/ethers'
-import { BrowserProvider, parseUnits } from 'ethers'
-
-const provider = new BrowserProvider(window.ethereum)
-const signer = await provider.getSigner()
-
-const status = await getVaultStatus(provider, VAULT_ADDRESS)
-const addresses = { vault: VAULT_ADDRESS, escrow: status.escrow }
-
-const { txHash, shares } = await depositSimple(
-  signer, addresses,
-  parseUnits('100', 6),
-  await signer.getAddress(),
+// --- Redeem ---
+const redeemResult = await smartRedeem(
+  walletClient, publicClient,
+  { vault: VAULT },
+  shares,
+  account.address,
+  account.address,
 )
+
+if ('guid' in redeemResult) {
+  console.log('Async redeem — waiting for LZ callback (~5 min)')
+  // Poll for USDC balance increase
+} else {
+  console.log('Sync redeem — assets:', redeemResult.assets)
+}
 ```
 
 ---
 
 ## Flows
 
-### Deposit
+### Smart flows (auto-detection)
+
+| Function | Description |
+|----------|-------------|
+| `smartDeposit` | Auto-detects vault mode → `depositSimple` (sync) or `depositAsync` (async) |
+| `smartRedeem` | Auto-detects vault mode → `redeemShares` (sync) or `redeemAsync` (async) |
+
+### Hub-chain deposit
 
 | ID | Function | When to use | Doc |
 |----|----------|-------------|-----|
-| D1 | `depositSimple` | User on hub chain, oracle ON or local vault | [→](./docs/flows/D1-deposit-simple.md) |
-| D2 | `depositMultiAsset` | Deposit multiple tokens in one call | [→](./docs/flows/D2-deposit-multi-asset.md) |
-| D3 | `depositCrossChainOracleOn` | Alias for D1 — hub with oracle ON, explicit naming | [→](./docs/flows/D3-deposit-oracle-on.md) |
-| D4 | `depositAsync` | Hub with oracle OFF — async LZ Read, shares arrive in ~1–5 min | [→](./docs/flows/D4-deposit-async.md) |
-| D5 | `mintAsync` | Same as D4 but user specifies exact share amount | [→](./docs/flows/D5-mint-async.md) |
-| D6/D7 | `depositFromSpoke` | User on another chain — tokens bridge via LZ OFT | [→](./docs/flows/D6-D7-deposit-from-spoke.md) |
+| — | `smartDeposit` | **Recommended.** Auto-detects vault type. | — |
+| D1 | `depositSimple` | User on hub chain, oracle ON or local vault | [->](./docs/flows/D1-deposit-simple.md) |
+| D2 | `depositMultiAsset` | Deposit multiple tokens in one call | [->](./docs/flows/D2-deposit-multi-asset.md) |
+| D3 | `depositCrossChainOracleOn` | Alias for D1 — hub with oracle ON | [->](./docs/flows/D3-deposit-oracle-on.md) |
+| D4 | `depositAsync` | Hub with oracle OFF — async LZ Read | [->](./docs/flows/D4-deposit-async.md) |
+| D5 | `mintAsync` | Same as D4 but user specifies exact share amount | [->](./docs/flows/D5-mint-async.md) |
 
-### Redeem
+### Cross-chain deposit (spoke -> hub)
 
 | ID | Function | When to use | Doc |
 |----|----------|-------------|-----|
-| R1 | `redeemShares` | Standard redeem, hub chain, no queue | [→](./docs/flows/R1-redeem-shares.md) |
-| R2 | `withdrawAssets` | Specify exact asset amount to receive | [→](./docs/flows/R2-withdraw-assets.md) |
-| R3 | `requestRedeem` | Withdrawal queue enabled, no timelock | [→](./docs/flows/R3-R4-request-redeem.md) |
-| R4 | `requestRedeem` | Withdrawal queue + mandatory wait period | [→](./docs/flows/R3-R4-request-redeem.md) |
-| R5 | `redeemAsync` | Hub with oracle OFF — async LZ Read | [→](./docs/flows/R5-redeem-async.md) |
-| R6 | `bridgeSharesToHub` | User on spoke — step 1: bridge shares to hub | [→](./docs/flows/R6-bridge-shares-to-hub.md) |
+| D6/D7 | `depositFromSpoke` | User on spoke chain — tokens bridge via LZ OFT | [->](./docs/flows/D6-D7-deposit-from-spoke.md) |
+
+For Stargate OFTs (stgUSDC, USDT, WETH), `depositFromSpoke` returns `composeData` — the user must execute a 2nd TX on the hub via `waitForCompose` + `executeCompose`. For standard OFTs, compose auto-executes in 1 TX.
+
+### Hub-chain redeem
+
+| ID | Function | When to use | Doc |
+|----|----------|-------------|-----|
+| — | `smartRedeem` | **Recommended.** Auto-detects vault type. | — |
+| R1 | `redeemShares` | Standard redeem, hub chain, no queue | [->](./docs/flows/R1-redeem-shares.md) |
+| R2 | `withdrawAssets` | Specify exact asset amount to receive | [->](./docs/flows/R2-withdraw-assets.md) |
+| R3 | `requestRedeem` | Withdrawal queue enabled, no timelock | [->](./docs/flows/R3-R4-request-redeem.md) |
+| R4 | `requestRedeem` | Withdrawal queue + mandatory wait period | [->](./docs/flows/R3-R4-request-redeem.md) |
+| R5 | `redeemAsync` | Hub with oracle OFF — async LZ Read | [->](./docs/flows/R5-redeem-async.md) |
+
+### Cross-chain redeem (spoke -> hub -> spoke)
+
+Full spoke redeem is a 3-step flow across two chains:
+
+```
+Step 1 (Spoke):  bridgeSharesToHub()       — shares spoke->hub via SHARE_OFT (~7 min)
+Step 2 (Hub):    smartRedeem()             — redeem on hub (auto-detects async, ~5 min callback)
+Step 3 (Hub):    bridgeAssetsToSpoke()     — assets hub->spoke via Stargate/OFT (~13 min)
+```
+
+| Function | Step | Doc |
+|----------|------|-----|
+| `resolveRedeemAddresses` | Pre-step: discover all addresses dynamically | — |
+| `preflightSpokeRedeem` | Pre-step: validate balances + gas on both chains | — |
+| `bridgeSharesToHub` | Step 1: bridge shares spoke->hub | [->](./docs/flows/R6-bridge-shares-to-hub.md) |
+| `smartRedeem` | Step 2: redeem on hub | — |
+| `bridgeAssetsToSpoke` | Step 3: bridge assets hub->spoke | [->](./docs/flows/R7-bridge-assets-to-spoke.md) |
+
+### Compose helpers (Stargate 2-TX flow)
+
+| Function | Description |
+|----------|-------------|
+| `waitForCompose` | Wait for pending compose in LZ Endpoint's composeQueue |
+| `quoteComposeFee` | Quote ETH needed for `executeCompose` (readFee + shareSendFee) |
+| `executeCompose` | Execute pending compose on hub chain |
 
 ### User helpers (read-only, no gas)
 
@@ -274,6 +303,64 @@ Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
 | `getVaultStatus` | full config snapshot + recommended flow + issues list |
 | `quoteLzFee` | native fee required for D4, D5, R5 |
 | `getAsyncRequestStatusLabel` | pending / ready-to-execute / completed / refunded |
+| `getUserBalances` | shares + underlying balance in one call |
+| `getMaxWithdrawable` | max assets redeemable given hub liquidity |
+| `getVaultSummary` | metadata + status + user position combined |
+
+### Spoke route discovery
+
+| Function | Description |
+|----------|-------------|
+| `getInboundRoutes` | All routes a user can deposit from (which chains/tokens) |
+| `getUserBalancesForRoutes` | User balances for all inbound routes |
+| `getOutboundRoutes` | All routes for spoke redeem (which chains to bridge back to) |
+| `quoteRouteDepositFee` | LZ fee for a specific inbound route |
+| `resolveRedeemAddresses` | Discover SHARE_OFT, asset OFT, spoke asset for a redeem route |
+
+### Topology & distribution
+
+| Function | Description |
+|----------|-------------|
+| `getVaultTopology` | Hub/spoke chain IDs, OFT routes, composer addresses |
+| `getFullVaultTopology` | Topology + all on-chain config |
+| `getVaultDistribution` | TVL breakdown across hub + all spokes |
+| `isOnHubChain` | Check if user is on the hub chain |
+
+---
+
+## LZ Timeouts (for UI integration)
+
+```ts
+import { LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
+
+LZ_TIMEOUTS.POLL_INTERVAL      // 30s — interval between balance polls
+LZ_TIMEOUTS.OFT_BRIDGE         // 15 min — standard OFT bridge (shares or assets)
+LZ_TIMEOUTS.STARGATE_BRIDGE    // 30 min — Stargate bridge (slower, pool mechanics)
+LZ_TIMEOUTS.LZ_READ_CALLBACK   // 15 min — async deposit/redeem LZ Read callback
+LZ_TIMEOUTS.COMPOSE_DELIVERY   // 45 min — compose delivery to hub (spoke deposit)
+LZ_TIMEOUTS.FULL_SPOKE_REDEEM  // 60 min — full spoke->hub->spoke redeem
+```
+
+Use these as timeout values in UI progress indicators. Do NOT timeout before these values — cross-chain operations can legitimately take this long.
+
+---
+
+## Pre-flight validation
+
+Run pre-flight checks before submitting transactions to catch issues early:
+
+```ts
+import { preflightSpokeDeposit, preflightSpokeRedeem } from '@oydual31/more-vaults-sdk/viem'
+
+// Before spoke deposit
+const check = await preflightSpokeDeposit(...)
+// Validates: spoke balance, gas, hub composer setup
+
+// Before spoke redeem
+const check = await preflightSpokeRedeem(route, shares, userAddress, shareBridgeFee)
+// Validates: shares on spoke, spoke gas (LZ fee + buffer), hub gas (asset bridge fee)
+// Returns: estimatedAssetBridgeFee, hubLiquidBalance, etc.
+```
 
 ---
 
@@ -282,14 +369,15 @@ Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
 ```
 more-vaults-sdk/
 ├── src/
-│   ├── viem/     ← viem/wagmi SDK
-│   └── ethers/   ← ethers.js v6 SDK
+│   ├── viem/     <- viem/wagmi SDK
+│   ├── ethers/   <- ethers.js v6 SDK
+│   └── react/    <- React hooks (wagmi)
 ├── docs/
-│   ├── flows/    ← one .md per flow with detailed examples
+│   ├── flows/    <- one .md per flow with detailed examples
 │   ├── user-helpers.md
 │   └── testing.md
-├── tests/        ← integration tests (require Foundry + Anvil)
-└── contracts/    ← protocol Solidity source + mocks (for running tests)
+├── scripts/      <- E2E test scripts (mainnet)
+└── tests/        <- integration tests (require Foundry + Anvil)
 ```
 
 Integration tests: [docs/testing.md](./docs/testing.md) — `bash tests/run.sh` runs all 43 tests.

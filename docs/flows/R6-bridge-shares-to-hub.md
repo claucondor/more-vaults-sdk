@@ -1,24 +1,40 @@
 # R6 — bridgeSharesToHub
 
-Step 1 of 2 for redeeming from a spoke chain. Bridges vault shares from the spoke chain to the hub via LayerZero OFT. Once shares arrive on the hub, the user calls `redeemShares` (R1) or `redeemAsync` (R5) on the hub.
+Step 1 of 3 for redeeming from a spoke chain. Bridges vault shares from the spoke chain to the hub via LayerZero SHARE_OFT.
 
-## When to use
-
-- User is on a **spoke chain** and holds vault shares (OFT-wrapped)
-- User wants to redeem and receive assets on the hub or back on the spoke
-
-## Two-step flow
+## Full spoke redeem flow
 
 ```
-Step 1: Spoke chain                    Step 2: Hub chain
-─────────────────────                  ─────────────────────────────
-bridgeSharesToHub()       →  (LZ)  →  redeemShares() or redeemAsync()
-  approve shareOFT                       burns shares, sends assets
-  OFT.send()
-  (~1–5 min delivery)
+Step 1 (Spoke):  bridgeSharesToHub()     — shares spoke->hub via SHARE_OFT (~5-10 min)
+Step 2 (Hub):    smartRedeem()           — redeem on hub (auto-detects sync/async)
+Step 3 (Hub):    bridgeAssetsToSpoke()   — assets hub->spoke via Stargate/OFT (~10-15 min)
 ```
 
-The frontend **must switch the user's chain** between steps. The two steps cannot be combined.
+The frontend **must switch the user's chain** between steps. Use `resolveRedeemAddresses()` to discover all addresses dynamically.
+
+## Pre-flight
+
+Before starting, run pre-flight checks:
+
+```ts
+import { resolveRedeemAddresses, preflightSpokeRedeem } from '@oydual31/more-vaults-sdk/viem'
+
+// Discover all addresses
+const route = await resolveRedeemAddresses(hubClient, VAULT, HUB_CHAIN_ID, SPOKE_CHAIN_ID)
+// route.spokeShareOft, route.hubAssetOft, route.spokeAsset, route.isStargate, etc.
+
+// Quote share bridge fee
+const shareBridgeFee = await spokeClient.readContract({
+  address: route.spokeShareOft,
+  abi: OFT_ABI,
+  functionName: 'quoteSend',
+  args: [sendParam, false],
+})
+
+// Validate everything
+const preflight = await preflightSpokeRedeem(route, shares, userAddress, shareBridgeFee.nativeFee)
+// Checks: shares on spoke, spoke gas, hub gas for TX2+TX3
+```
 
 ## Parameters
 
@@ -26,11 +42,11 @@ The frontend **must switch the user's chain** between steps. The two steps canno
 |-----------|------|-------------|
 | `walletClient` | `WalletClient` | Wallet client on the **spoke** chain |
 | `publicClient` | `PublicClient` | Public client on the **spoke** chain |
-| `shareOFT` | `Address` | OFTAdapter address for vault shares on the spoke chain |
-| `hubChainEid` | `number` | LayerZero EID for the hub chain (e.g. Flow EVM = **30332**) |
+| `shareOFT` | `Address` | SHARE_OFT address on the spoke chain (from `resolveRedeemAddresses`) |
+| `hubChainEid` | `number` | LayerZero EID for the hub chain |
 | `shares` | `bigint` | Amount of vault shares to bridge |
-| `receiver` | `Address` | Address that will receive shares on the hub chain |
-| `lzFee` | `bigint` | OFT send fee — quote via `OFT.quoteSend()` on spoke chain |
+| `receiver` | `Address` | Receiver address on the hub chain |
+| `lzFee` | `bigint` | OFT send fee — quote via `SHARE_OFT.quoteSend()` on spoke chain |
 
 ## Returns
 
@@ -38,139 +54,76 @@ The frontend **must switch the user's chain** between steps. The two steps canno
 { txHash: Hash }
 ```
 
-## Usage
-
-### viem
+## Usage — full spoke redeem (viem)
 
 ```ts
-import { bridgeSharesToHub, redeemShares } from '@oydual31/more-vaults-sdk/viem'
-import { createWalletClient, createPublicClient, http } from 'viem'
-import { arbitrum, flowMainnet } from 'viem/chains'
+import {
+  resolveRedeemAddresses,
+  preflightSpokeRedeem,
+  bridgeSharesToHub,
+  smartRedeem,
+  bridgeAssetsToSpoke,
+  OFT_ABI,
+  ERC20_ABI,
+  LZ_TIMEOUTS,
+} from '@oydual31/more-vaults-sdk/viem'
+import { pad, getAddress } from 'viem'
 
-const FLOW_EVM_EID  = 30332
-const SHARE_OFT_ARB = '0x...' // OFTAdapter for vault shares on Arbitrum
+const VAULT = '0x8f740aba022b3fcc934ab75c581c04b75e72aba6'
+const HUB_CHAIN_ID = 8453   // Base
+const SPOKE_CHAIN_ID = 1    // Ethereum
 
-// ── Step 1: on Arbitrum ──
-const arbPublic = createPublicClient({ chain: arbitrum, transport: http(ARB_RPC) })
-const arbWallet = createWalletClient({ account, chain: arbitrum, transport: http(ARB_RPC) })
+// 0. Resolve route dynamically
+const route = await resolveRedeemAddresses(hubClient, VAULT, HUB_CHAIN_ID, SPOKE_CHAIN_ID)
 
-// Quote LZ fee on spoke
-const lzFee = ... // from SHARE_OFT_ARB.quoteSend()
-
-const { txHash } = await bridgeSharesToHub(
-  arbWallet,
-  arbPublic,
-  SHARE_OFT_ARB,
-  FLOW_EVM_EID,
-  shares,
-  account.address, // receiver on hub
-  lzFee,
+// 1. Step 1: Bridge shares spoke -> hub
+const { txHash: tx1 } = await bridgeSharesToHub(
+  spokeWallet, spokeClient,
+  route.spokeShareOft, route.hubEid,
+  shares, account.address, shareBridgeFee,
 )
 
-// Wait for LayerZero delivery (~1-5 min), then switch to Flow EVM
+// Wait for shares to arrive on hub (~5-10 min)
+// Poll vault share balance on hub using LZ_TIMEOUTS.OFT_BRIDGE
 
-// ── Step 2: on Flow EVM ──
-const flowPublic = createPublicClient({ chain: flowMainnet, transport: http(FLOW_RPC) })
-const flowWallet = createWalletClient({ account, chain: flowMainnet, transport: http(FLOW_RPC) })
-
-const { assets } = await redeemShares(
-  flowWallet,
-  flowPublic,
-  { vault: HUB_VAULT, escrow: HUB_ESCROW },
-  shares,
-  account.address,
-  account.address,
+// 2. Step 2: Redeem on hub (auto-detects async)
+const redeemResult = await smartRedeem(
+  hubWallet, hubClient,
+  { vault: VAULT },
+  sharesOnHub, account.address, account.address,
 )
-```
 
-### viem (React + wagmi — chain switching)
+// For async vaults: wait for LZ Read callback (~5 min)
+// Poll USDC balance on hub using LZ_TIMEOUTS.LZ_READ_CALLBACK
 
-```tsx
-import { useSwitchChain, useWriteContract, useChainId } from 'wagmi'
-import { arbitrum, flowMainnet } from 'wagmi/chains'
-
-function SpokeRedeemFlow({ shares, lzFee }) {
-  const chainId = useChainId()
-  const { switchChainAsync } = useSwitchChain()
-  const { writeContractAsync } = useWriteContract()
-
-  async function step1Bridge() {
-    // Ensure user is on spoke chain
-    if (chainId !== arbitrum.id) await switchChainAsync({ chainId: arbitrum.id })
-
-    // Approve OFT for shares
-    await writeContractAsync({
-      address: SHARE_OFT_ARB,
-      abi: OFT_ABI,
-      functionName: 'approve',
-      args: [SHARE_OFT_ARB, shares],
-    })
-
-    // Send via OFT
-    await writeContractAsync({
-      address: SHARE_OFT_ARB,
-      abi: OFT_ABI,
-      functionName: 'send',
-      args: [sendParam, { nativeFee: lzFee, lzTokenFee: 0n }, account],
-      value: lzFee,
-    })
-  }
-
-  async function step2Redeem() {
-    // Switch to hub chain
-    if (chainId !== flowMainnet.id) await switchChainAsync({ chainId: flowMainnet.id })
-
-    await writeContractAsync({
-      address: HUB_VAULT,
-      abi: VAULT_ABI,
-      functionName: 'redeem',
-      args: [shares, account, account],
-    })
-  }
-
-  return (
-    <div>
-      <button onClick={step1Bridge}>Step 1: Bridge shares to hub</button>
-      <button onClick={step2Redeem}>Step 2: Redeem on Flow EVM</button>
-    </div>
-  )
-}
-```
-
-### ethers.js (browser — MetaMask)
-
-```ts
-import { BrowserProvider } from 'ethers'
-import { bridgeSharesToHub, redeemShares } from '@oydual31/more-vaults-sdk/ethers'
-
-// Step 1 — user on Arbitrum
-await window.ethereum.request({
-  method: 'wallet_switchEthereumChain',
-  params: [{ chainId: '0xa4b1' }], // Arbitrum
+// 3. Step 3: Bridge assets back to spoke
+const assetBridgeFee = await hubClient.readContract({
+  address: route.hubAssetOft,
+  abi: OFT_ABI,
+  functionName: 'quoteSend',
+  args: [/* sendParam */],
 })
-const arbProvider = new BrowserProvider(window.ethereum)
-const arbSigner = await arbProvider.getSigner()
 
-await bridgeSharesToHub(arbSigner, SHARE_OFT_ARB, 30332, shares, await arbSigner.getAddress(), lzFee)
+const { txHash: tx3 } = await bridgeAssetsToSpoke(
+  hubWallet, hubClient,
+  route.hubAssetOft, route.spokeEid,
+  usdcAmount, account.address,
+  assetBridgeFee.nativeFee, route.isStargate,
+)
 
-// Step 2 — user switches to Flow EVM
-await window.ethereum.request({
-  method: 'wallet_switchEthereumChain',
-  params: [{ chainId: '0x2eb' }], // Flow EVM (747)
-})
-const flowProvider = new BrowserProvider(window.ethereum)
-const flowSigner = await flowProvider.getSigner()
-
-await redeemShares(flowSigner, { vault: HUB_VAULT, escrow: HUB_ESCROW }, shares, await flowSigner.getAddress(), await flowSigner.getAddress())
+// Wait for USDC on spoke (~10-15 min for Stargate)
+// Poll using LZ_TIMEOUTS.STARGATE_BRIDGE
 ```
 
 ## Notes
 
-- Shares bridge **1:1** — `minAmountLD` is set to `shares` with no bridge slippage tolerance. This is intentional since vault shares should not suffer any bridge slippage in a properly configured OFT.
-- The frontend must track LayerZero delivery before enabling Step 2. Use the [LayerZero Scan API](https://layerzeroscan.com) or poll for the share balance on the hub.
+- Shares bridge **1:1** — `minAmountLD = shares` with no bridge slippage.
+- **SHARE_OFT `enforcedOptions`** must be configured on both spoke and hub for bidirectional bridging. Missing config causes `LZ_ULN_InvalidWorkerOptions(0)`.
+- Total spoke redeem time: ~25-30 min for async vaults with Stargate asset bridge.
+- Use `LZ_TIMEOUTS.FULL_SPOKE_REDEEM` (60 min) as the maximum timeout for the full flow.
 
 ## See also
 
-- [R1 — redeemShares](./R1-redeem-shares.md)
-- [R5 — redeemAsync](./R5-redeem-async.md)
+- [R7 — bridgeAssetsToSpoke](./R7-bridge-assets-to-spoke.md) — Step 3
+- [R5 — redeemAsync](./R5-redeem-async.md) — async redeem on hub
 - [D6/D7 — depositFromSpoke](./D6-D7-deposit-from-spoke.md) — reverse direction

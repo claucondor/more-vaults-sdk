@@ -338,3 +338,71 @@ switch (info.label) {
   case 'refunded':  // Failed, assets returned
 }
 ```
+
+---
+
+## getUserBalances
+
+Returns share balance and underlying token balance in a single multicall.
+
+### Signature
+
+```ts
+getUserBalances(publicClient: PublicClient, vault: Address, user: Address): Promise<UserBalances>
+```
+
+### Return type
+
+```ts
+interface UserBalances {
+  shares: bigint
+  underlying: bigint
+  underlyingAddress: Address
+}
+```
+
+---
+
+## getMaxWithdrawable
+
+Returns the maximum amount of assets a user can withdraw right now, limited by hub liquidity.
+
+### Signature
+
+```ts
+getMaxWithdrawable(publicClient: PublicClient, vault: Address, user: Address): Promise<MaxWithdrawable>
+```
+
+### Return type
+
+```ts
+interface MaxWithdrawable {
+  maxAssets: bigint       // min(user's share value, hub liquid balance)
+  maxShares: bigint       // shares equivalent of maxAssets
+  hubLiquidity: bigint    // current liquid assets on hub
+  userAssetValue: bigint  // total value of user's shares
+  isLiquidityConstrained: boolean  // true if hub liquidity < user's full value
+}
+```
+
+---
+
+## getVaultSummary
+
+Combined call that returns metadata + status + user position in one batch.
+
+### Signature
+
+```ts
+getVaultSummary(publicClient: PublicClient, vault: Address, user: Address): Promise<VaultSummary>
+```
+
+### Return type
+
+```ts
+interface VaultSummary {
+  metadata: VaultMetadata
+  status: VaultStatus
+  position: UserPosition
+}
+```
