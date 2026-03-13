@@ -47,12 +47,28 @@ User                    Hub Vault              LayerZero              Keeper
 
 ## Tracking the request
 
-After the tx, you get a `guid`. Use it to poll status:
+After the tx, you get a `guid`. Use `waitForAsyncRequest` to wait for finalization:
 
 ```ts
-const { fulfilled, finalized, result } = await getAsyncRequestStatus(publicClient, vault, guid)
+import { waitForAsyncRequest, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
+
+const final = await waitForAsyncRequest(
+  publicClient, vault, guid,
+  LZ_TIMEOUTS.POLL_INTERVAL,       // poll every 30s
+  LZ_TIMEOUTS.LZ_READ_CALLBACK,   // timeout 15 min
+  (s) => console.log(`fulfilled=${s.fulfilled} finalized=${s.finalized}`),
+)
+// final.status: 'completed' | 'refunded'
+// final.result: exact shares minted (bigint)
+```
+
+Or check status once:
+
+```ts
+const { fulfilled, finalized, refunded, result } = await getAsyncRequestStatus(publicClient, vault, guid)
 // fulfilled = LZ callback received
 // finalized = executeRequest called, shares minted
+// refunded  = request was refunded (assets returned)
 // result    = shares minted (bigint)
 ```
 
@@ -80,7 +96,7 @@ const { fulfilled, finalized, result } = await getAsyncRequestStatus(publicClien
 ### viem
 
 ```ts
-import { depositAsync, quoteLzFee, getVaultStatus, getAsyncRequestStatus } from '@oydual31/more-vaults-sdk/viem'
+import { depositAsync, quoteLzFee, getVaultStatus, waitForAsyncRequest, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
 
 const status = await getVaultStatus(publicClient, VAULT_ADDRESS)
 const lzFee = await quoteLzFee(publicClient, VAULT_ADDRESS)
@@ -94,13 +110,13 @@ const { txHash, guid } = await depositAsync(
   lzFee,
 )
 
-// Poll until finalized (~1-5 min)
-let status2 = await getAsyncRequestStatus(publicClient, VAULT_ADDRESS, guid)
-while (!status2.finalized) {
-  await new Promise(r => setTimeout(r, 10_000))
-  status2 = await getAsyncRequestStatus(publicClient, VAULT_ADDRESS, guid)
-}
-console.log('Shares minted:', status2.result)
+// Wait for finalization (~1-5 min)
+const final = await waitForAsyncRequest(
+  publicClient, VAULT_ADDRESS, guid,
+  LZ_TIMEOUTS.POLL_INTERVAL, LZ_TIMEOUTS.LZ_READ_CALLBACK,
+)
+console.log('Status:', final.status)   // 'completed' or 'refunded'
+console.log('Shares minted:', final.result)
 ```
 
 ### ethers.js

@@ -41,10 +41,23 @@ User                     Hub Vault              LayerZero              Keeper
 
 ## Tracking
 
-Same as D4: use the returned `guid` with `getAsyncRequestStatus`.
+Use `waitForAsyncRequest` to wait for finalization by GUID:
 
 ```ts
-const { fulfilled, finalized, result } = await getAsyncRequestStatus(publicClient, vault, guid)
+import { waitForAsyncRequest, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
+
+const final = await waitForAsyncRequest(
+  publicClient, vault, guid,
+  LZ_TIMEOUTS.POLL_INTERVAL, LZ_TIMEOUTS.LZ_READ_CALLBACK,
+)
+// final.status: 'completed' | 'refunded'
+// final.result: exact assets received (bigint)
+```
+
+Or check status once:
+
+```ts
+const { fulfilled, finalized, refunded, result } = await getAsyncRequestStatus(publicClient, vault, guid)
 // result = assets received (bigint)
 ```
 
@@ -79,7 +92,8 @@ import {
   redeemAsync,
   depositSimple,
   quoteLzFee,
-  getAsyncRequestStatus,
+  waitForAsyncRequest,
+  LZ_TIMEOUTS,
   getVaultStatus,
 } from '@oydual31/more-vaults-sdk/viem'
 import { parseUnits } from 'viem'
@@ -106,14 +120,13 @@ const { txHash, guid } = await redeemAsync(
   lzFee,
 )
 
-// 4. Poll until finalized (~1-5 min on mainnet)
-let status = await getAsyncRequestStatus(publicClient, VAULT, guid)
-while (!status.finalized) {
-  await new Promise(r => setTimeout(r, 10_000))
-  status = await getAsyncRequestStatus(publicClient, VAULT, guid)
-}
-
-console.log('Assets received:', status.result)
+// 4. Wait for finalization (~1-5 min on mainnet)
+const final = await waitForAsyncRequest(
+  publicClient, VAULT, guid,
+  LZ_TIMEOUTS.POLL_INTERVAL, LZ_TIMEOUTS.LZ_READ_CALLBACK,
+)
+console.log('Status:', final.status)        // 'completed' or 'refunded'
+console.log('Assets received:', final.result)
 ```
 
 ### viem (React + wagmi)
@@ -210,7 +223,7 @@ After the LZ Read response arrives, the keeper calls `executeRequest`, which int
 **Why would the hub be short?** Cross-chain vaults deploy most of their TVL to spoke chains where the yield is generated (Morpho, Aave, etc.). The hub typically holds only a small liquidity buffer. If more users redeem than the buffer can cover, the hub runs dry.
 
 **What to do if a redeem is refunded:**
-1. Check `getAsyncRequestStatus(publicClient, vault, guid)` — `status = 'refunded'` confirms this.
+1. Check via `waitForAsyncRequest` — `final.status === 'refunded'` confirms this. Or use `getAsyncRequestStatus(publicClient, vault, guid)` for a one-shot check.
 2. The user's shares are back in their wallet — nothing is lost.
 3. Contact the vault curator to repatriate liquidity from the spokes (`executeBridging`). This is a manual, curator-only operation.
 4. Retry the redeem once the hub has sufficient liquid assets.

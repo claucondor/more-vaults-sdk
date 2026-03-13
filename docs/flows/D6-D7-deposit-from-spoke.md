@@ -30,8 +30,9 @@ The SDK auto-detects the OFT type via `isStargateOft()` and handles them differe
 ```
 TX1 (Spoke):  depositFromSpoke()       → returns { txHash, guid, composeData }
 Wait:         waitForCompose()          → polls ComposeSent events (~5-15 min)
-TX2 (Hub):    executeCompose()          → triggers composer deposit + share return
-Wait:         Shares arrive on spoke    (~5-10 min)
+TX2 (Hub):    executeCompose()          → returns { txHash, guid? } — GUID for async vaults
+Wait:         waitForAsyncRequest()     → polls by GUID until finalized (~5 min)
+Wait:         Shares arrive on spoke via SHARE_OFT (~5-10 min)
 ```
 
 ### Standard OFT 1-TX flow
@@ -113,6 +114,7 @@ import {
   waitForCompose,
   quoteComposeFee,
   executeCompose,
+  waitForAsyncRequest,
   LZ_TIMEOUTS,
 } from '@oydual31/more-vaults-sdk/viem'
 
@@ -128,7 +130,7 @@ const result = await depositFromSpoke(
 
 if (result.composeData) {
   // Stargate: need TX2 on hub
-  // Wait for compose to arrive
+  // Wait for compose to arrive (~5 min)
   const compose = await waitForCompose(
     hubPublic, result.composeData, receiver,
     LZ_TIMEOUTS.POLL_INTERVAL, LZ_TIMEOUTS.COMPOSE_DELIVERY,
@@ -136,9 +138,20 @@ if (result.composeData) {
 
   // Quote and execute compose
   const fee = await quoteComposeFee(hubPublic, VAULT, SPOKE_EID, receiver)
-  const { txHash: tx2 } = await executeCompose(hubWallet, hubPublic, compose, fee)
+  const composeResult = await executeCompose(hubWallet, hubPublic, compose, fee)
+  // composeResult.guid is present for async vaults (oracle OFF)
 
-  // Wait for shares to arrive on spoke via LZ
+  // Wait for async finalization by GUID (~5 min)
+  if (composeResult.guid) {
+    const final = await waitForAsyncRequest(
+      hubPublic, VAULT, composeResult.guid,
+      LZ_TIMEOUTS.POLL_INTERVAL, LZ_TIMEOUTS.LZ_READ_CALLBACK,
+    )
+    console.log('Status:', final.status)   // 'completed' | 'refunded'
+    console.log('Shares:', final.result)
+  }
+
+  // Shares arrive on spoke via SHARE_OFT automatically
 } else {
   // Standard OFT: compose auto-executed, just wait for shares
 }

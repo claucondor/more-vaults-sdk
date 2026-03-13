@@ -94,6 +94,71 @@ const pos = await getUserPosition(provider, VAULT_ADDRESS, userAddress)
 
 ---
 
+## getUserPositionMultiChain
+
+Returns a user's position across all chains — hub shares + spoke SHARE_OFT balances. Automatically discovers vault topology and resolves SHARE_OFT addresses per spoke chain. No wallet connection needed.
+
+### Signature
+
+```ts
+getUserPositionMultiChain(vault: Address, user: Address): Promise<MultiChainUserPosition>
+```
+
+### Return type
+
+```ts
+interface MultiChainUserPosition {
+  hubShares: bigint                    // shares on hub chain vault
+  spokeShares: Record<number, bigint>  // chainId → SHARE_OFT balance
+  totalShares: bigint                  // hubShares + sum(spokeShares)
+  estimatedAssets: bigint              // totalShares converted to underlying
+  sharePrice: bigint                   // price of 1 whole share
+  decimals: number                     // vault share decimals
+  pendingWithdrawal: {
+    shares: bigint
+    timelockEndsAt: bigint
+    canRedeemNow: boolean
+  } | null
+}
+```
+
+### Usage
+
+```ts
+import { getUserPositionMultiChain } from '@oydual31/more-vaults-sdk/viem'
+
+const pos = await getUserPositionMultiChain(VAULT, userAddress)
+
+console.log('Hub shares:', pos.hubShares)
+console.log('Spoke shares:', pos.spokeShares)  // e.g. { 1: 1049912n, 42161: 0n }
+console.log('Total shares:', pos.totalShares)
+console.log('Est. assets:', pos.estimatedAssets)
+```
+
+### React hook
+
+```tsx
+import { useUserPositionMultiChain } from '@oydual31/more-vaults-sdk/react'
+
+function CrossChainPosition({ vault, user }) {
+  const { data: pos, isLoading } = useUserPositionMultiChain(vault, user)
+
+  if (isLoading || !pos) return <p>Loading...</p>
+
+  return (
+    <div>
+      <p>Hub: {pos.hubShares.toString()}</p>
+      {Object.entries(pos.spokeShares).map(([chainId, shares]) => (
+        <p key={chainId}>Chain {chainId}: {shares.toString()}</p>
+      ))}
+      <p>Total: {pos.totalShares.toString()}</p>
+    </div>
+  )
+}
+```
+
+---
+
 ## previewDeposit
 
 Simulates how many shares a given asset amount would mint at current vault state. Does not account for deposit caps or paused state — use `canDeposit` for eligibility.
@@ -336,6 +401,57 @@ switch (info.label) {
   case 'fulfilled': // LZ callback received, waiting for keeper
   case 'finalized': // Done — info.result is the amount minted/received
   case 'refunded':  // Failed, assets returned
+}
+```
+
+---
+
+## waitForAsyncRequest
+
+Polls an async request by GUID until it is finalized or refunded. Returns the exact amount of shares minted (deposit) or assets received (redeem). This is the recommended way to track async operations — no balance comparisons needed.
+
+### Signature
+
+```ts
+waitForAsyncRequest(
+  publicClient: PublicClient,
+  vault: Address,
+  guid: `0x${string}`,
+  pollInterval?: number,   // default 30_000 (30s)
+  timeout?: number,        // default 900_000 (15 min)
+  onPoll?: (status: { fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }) => void,
+): Promise<AsyncRequestFinalResult>
+```
+
+### Return type
+
+```ts
+interface AsyncRequestFinalResult {
+  status: 'completed' | 'refunded'
+  result: bigint  // exact shares minted or assets received
+}
+```
+
+### Usage
+
+```ts
+import { smartDeposit, waitForAsyncRequest, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
+
+const depositResult = await smartDeposit(walletClient, publicClient, { vault: VAULT }, amount, receiver)
+
+if ('guid' in depositResult) {
+  const final = await waitForAsyncRequest(
+    publicClient, VAULT, depositResult.guid,
+    LZ_TIMEOUTS.POLL_INTERVAL,       // 30s
+    LZ_TIMEOUTS.LZ_READ_CALLBACK,   // 15 min
+    (s) => console.log(`fulfilled=${s.fulfilled} finalized=${s.finalized}`),
+  )
+
+  if (final.status === 'completed') {
+    console.log('Shares minted:', final.result)
+  } else {
+    console.log('Deposit refunded')
+  }
 }
 ```
 

@@ -136,9 +136,14 @@ When you call `depositAsync`, `mintAsync`, or `redeemAsync`, the function return
 ```ts
 const { guid } = await depositAsync(...)
 
-// Poll status
+// Option 1: Wait for finalization (recommended)
+const final = await waitForAsyncRequest(publicClient, vault, guid)
+// final.status: 'completed' | 'refunded'
+// final.result: exact shares minted or assets received (bigint)
+
+// Option 2: Check status once
 const info = await getAsyncRequestStatusLabel(publicClient, vault, guid)
-// info.status: 'pending' | 'ready-to-execute' | 'completed' | 'refunded'
+// info.label: 'pending' | 'fulfilled' | 'finalized' | 'refunded'
 ```
 
 ---
@@ -179,7 +184,7 @@ The simplest way to use the SDK. `smartDeposit` and `smartRedeem` auto-detect th
 ### viem / wagmi
 
 ```ts
-import { smartDeposit, smartRedeem, getVaultStatus, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
+import { smartDeposit, smartRedeem, waitForAsyncRequest, getVaultStatus, LZ_TIMEOUTS } from '@oydual31/more-vaults-sdk/viem'
 import { createPublicClient, createWalletClient, http, parseUnits } from 'viem'
 import { base } from 'viem/chains'
 
@@ -200,7 +205,12 @@ const depositResult = await smartDeposit(
 if ('guid' in depositResult) {
   console.log('Async deposit — waiting for LZ callback (~5 min)')
   console.log('GUID:', depositResult.guid)
-  // Poll for shares using LZ_TIMEOUTS.LZ_READ_CALLBACK as timeout
+
+  // Wait for finalization by GUID — returns exact shares minted
+  const final = await waitForAsyncRequest(publicClient, VAULT, depositResult.guid)
+  // final.status: 'completed' | 'refunded'
+  // final.result: shares minted (bigint)
+  console.log('Shares minted:', final.result)
 } else {
   console.log('Sync deposit — shares:', depositResult.shares)
 }
@@ -216,7 +226,9 @@ const redeemResult = await smartRedeem(
 
 if ('guid' in redeemResult) {
   console.log('Async redeem — waiting for LZ callback (~5 min)')
-  // Poll for USDC balance increase
+
+  const final = await waitForAsyncRequest(publicClient, VAULT, redeemResult.guid)
+  console.log('Assets received:', final.result)
 } else {
   console.log('Sync redeem — assets:', redeemResult.assets)
 }
@@ -287,7 +299,8 @@ Step 3 (Hub):    bridgeAssetsToSpoke()     — assets hub->spoke via Stargate/OF
 |----------|-------------|
 | `waitForCompose` | Wait for pending compose in LZ Endpoint's composeQueue |
 | `quoteComposeFee` | Quote ETH needed for `executeCompose` (readFee + shareSendFee) |
-| `executeCompose` | Execute pending compose on hub chain |
+| `executeCompose` | Execute pending compose on hub chain. Returns `{ txHash, guid? }` — GUID present for async vaults |
+| `waitForAsyncRequest` | Poll async request by GUID until finalized. Returns `{ status, result }` with exact amounts |
 
 ### User helpers (read-only, no gas)
 
@@ -295,7 +308,8 @@ Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
 
 | Function | What it returns |
 |----------|----------------|
-| `getUserPosition` | shares, asset value, share price, pending withdrawal |
+| `getUserPosition` | shares, asset value, share price, pending withdrawal (single chain) |
+| `getUserPositionMultiChain` | shares across hub + all spokes, total shares, estimated assets |
 | `previewDeposit` | estimated shares for a given asset amount |
 | `previewRedeem` | estimated assets for a given share amount |
 | `canDeposit` | `{ allowed, reason }` — paused / cap-full / ok |
@@ -321,7 +335,8 @@ Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
 
 | Function | Description |
 |----------|-------------|
-| `getVaultTopology` | Hub/spoke chain IDs, OFT routes, composer addresses |
+| `discoverVaultTopology` | Auto-discover hub/spoke topology across all chains (no wallet needed) |
+| `getVaultTopology` | Hub/spoke chain IDs, OFT routes, composer addresses (requires correct chain client) |
 | `getFullVaultTopology` | Topology + all on-chain config |
 | `getVaultDistribution` | TVL breakdown across hub + all spokes |
 | `isOnHubChain` | Check if user is on the hub chain |
