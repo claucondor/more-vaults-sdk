@@ -2,7 +2,7 @@
 // Barrel export for all flows and utilities.
 
 // --- Chain constants ---
-export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID } from "./chains";
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, LZ_TIMEOUTS } from "./chains";
 
 // --- Types ---
 export type {
@@ -69,7 +69,9 @@ export {
   requestRedeem,
   getWithdrawalRequest,
   redeemAsync,
+  smartRedeem,
   bridgeSharesToHub,
+  bridgeAssetsToSpoke,
 } from "./redeemFlows";
 
 // --- Utilities ---

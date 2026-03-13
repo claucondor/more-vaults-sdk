@@ -37,3 +37,22 @@ export const CHAIN_ID_TO_EID: Record<number, number> = {
   [CHAIN_IDS.base]: LZ_EIDS.base,
   [CHAIN_IDS.ethereum]: LZ_EIDS.ethereum,
 };
+
+/**
+ * Recommended timeouts for cross-chain operations (milliseconds).
+ * UIs should show a progress indicator and NOT timeout before these values.
+ */
+export const LZ_TIMEOUTS = {
+  /** Poll interval between balance/event checks */
+  POLL_INTERVAL: 30_000,
+  /** Standard OFT bridge (shares or assets, non-Stargate) */
+  OFT_BRIDGE: 900_000,          // 15 min
+  /** Stargate bridge (USDC, USDT, WETH) — slower due to pool mechanics */
+  STARGATE_BRIDGE: 1_800_000,   // 30 min
+  /** LZ Read callback (async vault actions) */
+  LZ_READ_CALLBACK: 900_000,   // 15 min
+  /** Compose delivery to hub (deposit from spoke) */
+  COMPOSE_DELIVERY: 2_700_000,  // 45 min
+  /** Full spoke→hub→spoke redeem (all steps combined) */
+  FULL_SPOKE_REDEEM: 3_600_000, // 60 min
+} as const;

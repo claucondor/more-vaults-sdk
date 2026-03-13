@@ -15,6 +15,7 @@ import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
 import { EscrowNotConfiguredError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
+import { getVaultStatus, quoteLzFee } from "./utils";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -287,6 +288,114 @@ export async function bridgeSharesToHub(
     extraOptions: "0x",
     composeMsg: "0x",
     oftCmd: "0x",
+  };
+
+  const msgFee = { nativeFee: lzFee, lzTokenFee: 0n };
+
+  const tx = await oft.send(sendParam, msgFee, refundAddress, {
+    value: lzFee,
+  });
+  const receipt = await tx.wait();
+
+  return { receipt };
+}
+
+// ---------------------------------------------------------------------------
+// Smart redeem -- auto-detect vault type
+// ---------------------------------------------------------------------------
+
+/**
+ * Smart redeem — auto-selects the correct flow based on vault configuration.
+ *
+ * Detects the vault mode and dispatches to:
+ * - Sync vaults (local / cross-chain-oracle): `redeemShares`
+ * - Async vaults (cross-chain, oracle OFF): `redeemAsync` (quotes LZ fee automatically)
+ *
+ * @param signer         Wallet signer with account attached
+ * @param addresses      Vault address set (`escrow` required for async vaults)
+ * @param shares         Amount of shares to redeem
+ * @param receiver       Address that will receive the underlying assets
+ * @param owner          Owner of the shares being redeemed
+ * @param extraOptions   Optional LZ extra options (only used for async vaults)
+ * @returns              RedeemResult or AsyncRequestResult depending on vault mode
+ */
+export async function smartRedeem(
+  signer: Signer,
+  addresses: VaultAddresses,
+  shares: bigint,
+  receiver: string,
+  owner: string,
+  extraOptions: string = "0x"
+): Promise<RedeemResult | AsyncRequestResult> {
+  const provider = signer.provider!;
+  const vault = addresses.vault;
+  const status = await getVaultStatus(provider, vault);
+
+  if (status.mode === "paused") {
+    throw new Error(`[MoreVaults] Vault ${vault} is paused. Cannot redeem.`);
+  }
+
+  if (status.recommendedDepositFlow === "depositAsync") {
+    // Async vault — use redeemAsync
+    const lzFee = await quoteLzFee(provider, vault, extraOptions);
+    return redeemAsync(signer, addresses, shares, receiver, owner, lzFee, extraOptions);
+  }
+
+  // Sync vault — direct redeem
+  return redeemShares(signer, addresses, shares, receiver, owner);
+}
+
+// ---------------------------------------------------------------------------
+// R7 -- Bridge assets from hub back to spoke
+// ---------------------------------------------------------------------------
+
+/**
+ * Bridge underlying assets from hub back to spoke chain via OFT.
+ *
+ * Step 3 of the full spoke redeem flow:
+ *   1. bridgeSharesToHub() — shares spoke->hub
+ *   2. smartRedeem() — redeem on hub
+ *   3. bridgeAssetsToSpoke() — assets hub->spoke
+ *
+ * @param signer         Wallet signer on the HUB chain
+ * @param assetOFT       OFT address for the underlying asset on hub
+ * @param spokeChainEid  LayerZero EID for the spoke (destination) chain
+ * @param amount         Amount of underlying assets to bridge
+ * @param receiver       Receiver address on the spoke chain
+ * @param lzFee          OFT send fee (quote via OFT.quoteSend)
+ * @param isStargate     Whether this is a Stargate OFT (uses TAXI mode)
+ * @returns              Transaction receipt
+ */
+export async function bridgeAssetsToSpoke(
+  signer: Signer,
+  assetOFT: string,
+  spokeChainEid: number,
+  amount: bigint,
+  receiver: string,
+  lzFee: bigint,
+  isStargate: boolean = true
+): Promise<{ receipt: ContractTransactionReceipt }> {
+  const oft = new Contract(assetOFT, OFT_ABI, signer);
+
+  // Read underlying token and approve
+  const token: string = await oft.token();
+  if (token.toLowerCase() !== assetOFT.toLowerCase()) {
+    await ensureAllowance(signer, token, assetOFT, amount);
+  } else {
+    await ensureAllowance(signer, assetOFT, assetOFT, amount);
+  }
+
+  const refundAddress = await signer.getAddress();
+  const toBytes32 = zeroPadValue(receiver, 32);
+
+  const sendParam = {
+    dstEid: spokeChainEid,
+    to: toBytes32,
+    amountLD: amount,
+    minAmountLD: amount * 99n / 100n, // 1% slippage for Stargate
+    extraOptions: "0x",
+    composeMsg: "0x",
+    oftCmd: isStargate ? "0x01" : "0x",
   };
 
   const msgFee = { nativeFee: lzFee, lzTokenFee: 0n };
