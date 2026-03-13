@@ -1,8 +1,11 @@
 import { type Address, type PublicClient, getAddress } from 'viem'
-import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI, OFT_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
 import { getVaultStatus } from './utils'
 import type { VaultStatus } from './utils'
+import { discoverVaultTopology, OMNI_FACTORY_ADDRESS } from './topology'
+import { createChainClient } from './spokeRoutes'
+import { CHAIN_ID_TO_EID } from './chains'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -497,4 +500,184 @@ export async function getVaultSummary(
     getVaultMetadata(publicClient, vault),
   ])
   return { ...status, ...metadata }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FACTORY_COMPOSER_ABI = [
+  {
+    type: 'function' as const,
+    name: 'vaultComposer',
+    inputs: [{ name: '_vault', type: 'address' }],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view' as const,
+  },
+] as const
+
+const COMPOSER_SHARE_OFT_ABI = [
+  {
+    type: 'function' as const,
+    name: 'SHARE_OFT',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view' as const,
+  },
+] as const
+
+export interface MultiChainUserPosition {
+  /** Shares held directly on the hub vault (vault.balanceOf) */
+  hubShares: bigint
+  /** Per-spoke SHARE_OFT balances: { [chainId]: bigint } */
+  spokeShares: Record<number, bigint>
+  /** hubShares + sum of all spokeShares */
+  totalShares: bigint
+  /** convertToAssets(totalShares) on the hub */
+  estimatedAssets: bigint
+  /** Share price: convertToAssets(10^decimals) */
+  sharePrice: bigint
+  /** Vault decimals */
+  decimals: number
+  /** Pending async withdrawal request on hub, or null */
+  pendingWithdrawal: {
+    shares: bigint
+    timelockEndsAt: bigint
+    canRedeemNow: boolean
+  } | null
+}
+
+/**
+ * Read the user's position across all chains of an omni vault.
+ *
+ * Discovers topology automatically, reads hub shares + pending withdrawal,
+ * then reads SHARE_OFT balances on each spoke chain in parallel.
+ *
+ * For local (single-chain) vaults, spokeShares will be empty and this
+ * behaves identically to getUserPosition.
+ *
+ * @param vault  Vault address (same on all chains via CREATE3)
+ * @param user   User wallet address
+ * @returns      Aggregated position across all chains
+ */
+export async function getUserPositionMultiChain(
+  vault: Address,
+  user: Address,
+): Promise<MultiChainUserPosition> {
+  const v = getAddress(vault)
+  const u = getAddress(user)
+
+  // Step 1: discover topology
+  const topo = await discoverVaultTopology(vault)
+  const hubClient = createChainClient(topo.hubChainId)
+  if (!hubClient) throw new Error(`No public RPC for hub chainId ${topo.hubChainId}`)
+
+  // Step 2: read hub data (shares, decimals, withdrawal request)
+  const [hubShares, decimals, withdrawalRequest] = await (hubClient as PublicClient).multicall({
+    contracts: [
+      { address: v, abi: VAULT_ABI, functionName: 'balanceOf', args: [u] },
+      { address: v, abi: METADATA_ABI, functionName: 'decimals' },
+      { address: v, abi: VAULT_ABI, functionName: 'getWithdrawalRequest', args: [u] },
+    ],
+    allowFailure: false,
+  })
+
+  const [withdrawShares, timelockEndsAt] = withdrawalRequest as unknown as [bigint, bigint]
+
+  // Step 3: resolve SHARE_OFT addresses for spokes (if any)
+  const spokeShares: Record<number, bigint> = {}
+
+  if (topo.spokeChainIds.length > 0) {
+    // Get hub SHARE_OFT via factory → composer → SHARE_OFT
+    let hubShareOft: Address | null = null
+    try {
+      const composerAddress = await (hubClient as PublicClient).readContract({
+        address: OMNI_FACTORY_ADDRESS,
+        abi: FACTORY_COMPOSER_ABI,
+        functionName: 'vaultComposer',
+        args: [v],
+      }) as Address
+
+      if (composerAddress !== '0x0000000000000000000000000000000000000000') {
+        hubShareOft = await (hubClient as PublicClient).readContract({
+          address: composerAddress,
+          abi: COMPOSER_SHARE_OFT_ABI,
+          functionName: 'SHARE_OFT',
+        }) as Address
+      }
+    } catch { /* no composer — skip spoke reads */ }
+
+    if (hubShareOft) {
+      // Read spoke SHARE_OFT addresses via peers() and balances in parallel
+      const spokePromises = topo.spokeChainIds.map(async (spokeChainId) => {
+        try {
+          const spokeEid = CHAIN_ID_TO_EID[spokeChainId]
+          if (!spokeEid) return { chainId: spokeChainId, balance: 0n }
+
+          // Get spoke SHARE_OFT address from hub peers()
+          const spokeOftBytes32 = await (hubClient as PublicClient).readContract({
+            address: hubShareOft!,
+            abi: OFT_ABI,
+            functionName: 'peers',
+            args: [spokeEid],
+          }) as `0x${string}`
+
+          const spokeOft = getAddress(`0x${spokeOftBytes32.slice(-40)}`) as Address
+          if (spokeOft === '0x0000000000000000000000000000000000000000') {
+            return { chainId: spokeChainId, balance: 0n }
+          }
+
+          // Read balance on spoke chain
+          const spokeClient = createChainClient(spokeChainId)
+          if (!spokeClient) return { chainId: spokeChainId, balance: 0n }
+
+          const balance = await (spokeClient as PublicClient).readContract({
+            address: spokeOft,
+            abi: ERC20_ABI,
+            functionName: 'balanceOf',
+            args: [u],
+          })
+
+          return { chainId: spokeChainId, balance }
+        } catch {
+          return { chainId: spokeChainId, balance: 0n }
+        }
+      })
+
+      const results = await Promise.all(spokePromises)
+      for (const { chainId, balance } of results) {
+        spokeShares[chainId] = balance
+      }
+    }
+  }
+
+  // Step 4: compute totals
+  const totalSpokeShares = Object.values(spokeShares).reduce((sum, b) => sum + b, 0n)
+  const totalShares = hubShares + totalSpokeShares
+
+  const oneShare = 10n ** BigInt(decimals)
+  const [estimatedAssets, sharePrice] = await Promise.all([
+    totalShares === 0n
+      ? Promise.resolve(0n)
+      : (hubClient as PublicClient).readContract({ address: v, abi: VAULT_ABI, functionName: 'convertToAssets', args: [totalShares] }),
+    (hubClient as PublicClient).readContract({ address: v, abi: VAULT_ABI, functionName: 'convertToAssets', args: [oneShare] }),
+  ])
+
+  // Step 5: pending withdrawal
+  const block = await (hubClient as PublicClient).getBlock()
+  const pendingWithdrawal = withdrawShares === 0n
+    ? null
+    : {
+        shares: withdrawShares,
+        timelockEndsAt,
+        canRedeemNow: timelockEndsAt === 0n || block.timestamp >= timelockEndsAt,
+      }
+
+  return {
+    hubShares,
+    spokeShares,
+    totalShares,
+    estimatedAssets,
+    sharePrice,
+    decimals,
+    pendingWithdrawal,
+  }
 }

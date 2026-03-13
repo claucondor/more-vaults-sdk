@@ -101,6 +101,7 @@ export {
   getUserBalances,
   getMaxWithdrawable,
   getVaultSummary,
+  getUserPositionMultiChain,
 } from './userHelpers'
 export type {
   UserPosition,
@@ -112,6 +113,7 @@ export type {
   UserBalances,
   MaxWithdrawable,
   VaultSummary,
+  MultiChainUserPosition,
 } from './userHelpers'
 
 // --- Topology ---

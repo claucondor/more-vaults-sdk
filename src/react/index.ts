@@ -11,6 +11,9 @@ export type { VaultMetadata } from './useVaultMetadata.js'
 export { useUserPosition } from './useUserPosition.js'
 export type { UserPosition } from './useUserPosition.js'
 
+export { useUserPositionMultiChain } from './useUserPositionMultiChain.js'
+export type { MultiChainUserPosition } from './useUserPositionMultiChain.js'
+
 export { useLzFee } from './useLzFee.js'
 
 export { useAsyncRequestStatus } from './useAsyncRequestStatus.js'
