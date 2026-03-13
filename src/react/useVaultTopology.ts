@@ -2,7 +2,7 @@ import { usePublicClient, useChainId } from 'wagmi'
 import { useQuery } from '@tanstack/react-query'
 import { asSdkClient } from '../viem/wagmiCompat.js'
 import {
-  getVaultTopology,
+  discoverVaultTopology,
   isOnHubChain,
   getAllVaultChainIds,
   OMNI_FACTORY_ADDRESS,
@@ -28,14 +28,14 @@ interface UseVaultTopologyReturn {
 }
 
 /**
- * Resolve the cross-chain topology of a vault from the current wallet chain.
+ * Resolve the cross-chain topology of a vault with automatic multi-chain discovery.
  *
- * Returns the hub chain, all spoke chains, and whether the user needs to
- * switch networks to interact with the hub.
- *
- * Since MoreVaults uses CREATE3, the vault address is the same on all chains.
+ * Uses `discoverVaultTopology` internally: if the wallet's current chain doesn't
+ * know the vault, it iterates all supported chains via public RPCs until the hub
+ * is found. Works even without a connected wallet.
  *
  * @example
+ * // Works regardless of which chain the wallet is on (or if disconnected)
  * const { topology, needsNetworkSwitch, allChainIds } = useVaultTopology('0xVAULT')
  *
  * if (needsNetworkSwitch) {
@@ -50,9 +50,14 @@ export function useVaultTopology(
   const publicClient = usePublicClient()
 
   const { data: topology, isLoading } = useQuery<VaultTopology>({
-    queryKey: ['vaultTopology', vault, currentChainId, factoryAddress],
-    queryFn: () => getVaultTopology(asSdkClient(publicClient), vault!, factoryAddress),
-    enabled: !!vault && !!publicClient,
+    // Key does NOT include currentChainId — topology is chain-independent
+    queryKey: ['vaultTopology', vault, factoryAddress],
+    queryFn: () => discoverVaultTopology(
+      vault!,
+      publicClient ? asSdkClient(publicClient) : null,
+      factoryAddress,
+    ),
+    enabled: !!vault,
     staleTime: 5 * 60 * 1000, // topology rarely changes — 5 min cache
   })
 

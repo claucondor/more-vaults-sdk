@@ -118,6 +118,7 @@ export type {
 export {
   getVaultTopology,
   getFullVaultTopology,
+  discoverVaultTopology,
   isOnHubChain,
   getAllVaultChainIds,
   OMNI_FACTORY_ADDRESS,

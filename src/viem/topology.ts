@@ -1,5 +1,6 @@
 import { type Address, type PublicClient, getAddress } from 'viem'
-import { EID_TO_CHAIN_ID, CHAIN_ID_TO_EID } from './chains'
+import { EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, CHAIN_IDS } from './chains'
+import { createChainClient } from './spokeRoutes'
 
 // MoreVaults OMNI factory — same address on every supported chain (CREATE3)
 export const OMNI_FACTORY_ADDRESS: Address = '0x7bDB8B17604b03125eFAED33cA0c55FBf856BB0C'
@@ -168,6 +169,89 @@ export async function getFullVaultTopology(
     )
   }
   return topo
+}
+
+/** All mainnet chain IDs where the OMNI_FACTORY is deployed */
+const DISCOVERY_CHAIN_IDS = Object.values(CHAIN_IDS).filter(
+  id => id !== 545, // exclude testnet
+) as number[]
+
+/**
+ * Discover a vault's topology across all supported chains.
+ *
+ * Unlike `getVaultTopology` (which queries a single chain), this function
+ * automatically iterates all supported chains when the initial query returns
+ * `role: "local"`. This handles the case where the caller doesn't know which
+ * chain the vault is deployed on, or when no wallet is connected.
+ *
+ * If a `publicClient` is provided, it's tried first. If that returns "local",
+ * every other supported chain is probed via `createChainClient` (public RPCs).
+ * If no `publicClient` is provided, all chains are probed.
+ *
+ * Once a hub is found, `getFullVaultTopology` is called to get the complete
+ * spoke list.
+ *
+ * @param vault          Vault address (same on all chains via CREATE3)
+ * @param publicClient   Optional — client for the "preferred" chain to try first
+ * @param factoryAddress MoreVaults factory (defaults to OMNI_FACTORY_ADDRESS)
+ *
+ * @example
+ * // No wallet connected — discovers that 0x8f74... is hub on Base
+ * const topo = await discoverVaultTopology('0x8f740...')
+ * // { role: 'hub', hubChainId: 8453, spokeChainIds: [1, 42161] }
+ */
+export async function discoverVaultTopology(
+  vault: Address,
+  publicClient?: PublicClient | null,
+  factoryAddress: Address = OMNI_FACTORY_ADDRESS,
+): Promise<VaultTopology> {
+  const v = getAddress(vault)
+
+  // 1. Try the provided client first (fast path — avoids extra RPC calls)
+  let triedChainId: number | undefined
+  if (publicClient) {
+    try {
+      const topo = await getVaultTopology(publicClient, v, factoryAddress)
+      if (topo.role !== 'local') {
+        // Found hub or spoke — if spoke, resolve full topology from hub
+        if (topo.role === 'spoke') {
+          const hubClient = createChainClient(topo.hubChainId)
+          if (hubClient) {
+            try {
+              return await getFullVaultTopology(hubClient, v, factoryAddress)
+            } catch { /* fall through to return partial */ }
+          }
+        }
+        return topo
+      }
+      triedChainId = publicClient.chain?.id
+    } catch { /* client failed — continue with discovery */ }
+  }
+
+  // 2. Iterate all supported chains
+  for (const chainId of DISCOVERY_CHAIN_IDS) {
+    if (chainId === triedChainId) continue
+    const client = createChainClient(chainId)
+    if (!client) continue
+
+    try {
+      const topo = await getVaultTopology(client, v, factoryAddress)
+      if (topo.role === 'hub') return topo
+      if (topo.role === 'spoke') {
+        // Found spoke — get full topology from hub
+        const hubClient = createChainClient(topo.hubChainId)
+        if (hubClient) {
+          try {
+            return await getFullVaultTopology(hubClient, v, factoryAddress)
+          } catch { return topo }
+        }
+        return topo
+      }
+    } catch { /* this chain doesn't have the factory or vault — skip */ }
+  }
+
+  // 3. Not found on any chain — return local with chainId 0
+  return { role: 'local', hubChainId: 0, spokeChainIds: [] }
 }
 
 /**
