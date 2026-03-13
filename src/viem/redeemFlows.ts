@@ -8,7 +8,7 @@ import {
   pad,
   zeroAddress,
 } from 'viem'
-import { VAULT_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI, ERC20_ABI } from './abis'
+import { VAULT_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI, ERC20_ABI, METADATA_ABI } from './abis'
 import type {
   VaultAddresses,
   RedeemResult,
@@ -355,6 +355,50 @@ export async function smartRedeem(
 }
 
 /**
+ * Quote the LZ fee for bridging shares from spoke to hub via SHARE_OFT.
+ *
+ * **IMPORTANT**: `amountLD` must be in SHARE_OFT native decimals (e.g. 18),
+ * NOT vault decimals (e.g. 8). Use the raw `SHARE_OFT.balanceOf(user)` value,
+ * or `getUserPositionMultiChain().rawSpokeShares[chainId]`.
+ *
+ * @param spokePublicClient  Public client on the SPOKE chain
+ * @param shareOFT           SHARE_OFT address on the spoke chain
+ * @param hubChainEid        LayerZero Endpoint ID for the hub chain
+ * @param amountLD           Shares in SHARE_OFT native decimals (raw balanceOf)
+ * @param receiver           Receiver address on the hub chain
+ * @returns                  LZ native fee in wei
+ */
+export async function quoteShareBridgeFee(
+  spokePublicClient: PublicClient,
+  shareOFT: Address,
+  hubChainEid: number,
+  amountLD: bigint,
+  receiver: Address,
+): Promise<bigint> {
+  const oft = getAddress(shareOFT)
+  const toBytes32 = pad(getAddress(receiver), { size: 32 })
+
+  const sendParam = {
+    dstEid: hubChainEid,
+    to: toBytes32,
+    amountLD,
+    minAmountLD: amountLD,
+    extraOptions: '0x' as `0x${string}`,
+    composeMsg: '0x' as `0x${string}`,
+    oftCmd: '0x' as `0x${string}`,
+  }
+
+  const feeResult = await spokePublicClient.readContract({
+    address: oft,
+    abi: OFT_ABI,
+    functionName: 'quoteSend',
+    args: [sendParam, false],
+  }) as { nativeFee: bigint; lzTokenFee: bigint }
+
+  return feeResult.nativeFee
+}
+
+/**
  * R6 — Bridge shares from spoke to hub chain via OFT.
  *
  * This is step 1 of a cross-chain spoke redeem flow:
@@ -362,24 +406,20 @@ export async function smartRedeem(
  *   2. `smartRedeem()` — redeem shares on hub → underlying (auto-detects async)
  *   3. `bridgeAssetsToSpoke()` — bridge assets from hub → spoke via asset OFT
  *
- * The steps happen on different chains and cannot be combined.
- * The frontend must switch chains between steps.
+ * **IMPORTANT**: The `shares` parameter must be in SHARE_OFT decimals (the raw
+ * `balanceOf` from the spoke OFT), NOT in vault decimals. Use the user's actual
+ * SHARE_OFT balance, or convert with `vaultShares * 10^(oftDecimals - vaultDecimals)`.
  *
  * **User transactions on spoke chain**: 1 approve (shares to shareOFT) + 1 OFT.send().
  * **Gas**: Requires native token on spoke for LZ fees, and gas on hub for steps 2+3.
- *
- * ## Tested flows
- *
- * - [x] SHARE_OFT bridge (Eth→Base, vault 0x8f74...ba6):
- *       Delivery ~7 min. Required enforcedOptions on Eth SHARE_OFT for dstEid=30184.
  *
  * @param walletClient   Wallet client on the SPOKE chain
  * @param publicClient   Public client on the SPOKE chain
  * @param shareOFT       OFTAdapter address for vault shares on the spoke chain
  * @param hubChainEid    LayerZero Endpoint ID for the hub chain
- * @param shares         Amount of vault shares to bridge
+ * @param shares         Amount of shares in SHARE_OFT decimals (use raw balanceOf)
  * @param receiver       Receiver address on the HUB chain
- * @param lzFee          msg.value for OFT send (quote via OFT.quoteSend)
+ * @param lzFee          msg.value for OFT send (from quoteShareBridgeFee)
  * @returns              Transaction hash of the OFT.send() call
  */
 export async function bridgeSharesToHub(

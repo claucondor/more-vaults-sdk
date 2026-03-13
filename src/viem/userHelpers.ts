@@ -527,9 +527,12 @@ const COMPOSER_SHARE_OFT_ABI = [
 export interface MultiChainUserPosition {
   /** Shares held directly on the hub vault (vault.balanceOf) */
   hubShares: bigint
-  /** Per-spoke SHARE_OFT balances: { [chainId]: bigint } */
+  /** Per-spoke SHARE_OFT balances normalized to vault decimals: { [chainId]: bigint } */
   spokeShares: Record<number, bigint>
-  /** hubShares + sum of all spokeShares */
+  /** Per-spoke SHARE_OFT raw balances in OFT native decimals: { [chainId]: bigint }
+   *  Use these for bridgeSharesToHub() and quoteShareBridgeFee() */
+  rawSpokeShares: Record<number, bigint>
+  /** hubShares + sum of all spokeShares (in vault decimals) */
   totalShares: bigint
   /** convertToAssets(totalShares) on the hub */
   estimatedAssets: bigint
@@ -584,6 +587,7 @@ export async function getUserPositionMultiChain(
 
   // Step 3: resolve SHARE_OFT addresses for spokes (if any)
   const spokeShares: Record<number, bigint> = {}
+  const rawSpokeShares: Record<number, bigint> = {}
 
   if (topo.spokeChainIds.length > 0) {
     // Get hub SHARE_OFT via factory → composer → SHARE_OFT
@@ -610,7 +614,7 @@ export async function getUserPositionMultiChain(
       const spokePromises = topo.spokeChainIds.map(async (spokeChainId) => {
         try {
           const spokeEid = CHAIN_ID_TO_EID[spokeChainId]
-          if (!spokeEid) return { chainId: spokeChainId, balance: 0n }
+          if (!spokeEid) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
 
           // Get spoke SHARE_OFT address from hub peers()
           const spokeOftBytes32 = await (hubClient as PublicClient).readContract({
@@ -622,12 +626,12 @@ export async function getUserPositionMultiChain(
 
           const spokeOft = getAddress(`0x${spokeOftBytes32.slice(-40)}`) as Address
           if (spokeOft === '0x0000000000000000000000000000000000000000') {
-            return { chainId: spokeChainId, balance: 0n }
+            return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
           }
 
           // Read balance + decimals on spoke chain
           const spokeClient = createChainClient(spokeChainId)
-          if (!spokeClient) return { chainId: spokeChainId, balance: 0n }
+          if (!spokeClient) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
 
           const [rawBalance, spokeOftDecimals] = await (spokeClient as PublicClient).multicall({
             contracts: [
@@ -648,15 +652,16 @@ export async function getUserPositionMultiChain(
             balance = rawBalance
           }
 
-          return { chainId: spokeChainId, balance }
+          return { chainId: spokeChainId, balance, rawBalance }
         } catch {
-          return { chainId: spokeChainId, balance: 0n }
+          return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
         }
       })
 
       const results = await Promise.all(spokePromises)
-      for (const { chainId, balance } of results) {
+      for (const { chainId, balance, rawBalance } of results) {
         spokeShares[chainId] = balance
+        rawSpokeShares[chainId] = rawBalance
       }
     }
   }
@@ -686,6 +691,7 @@ export async function getUserPositionMultiChain(
   return {
     hubShares,
     spokeShares,
+    rawSpokeShares,
     totalShares,
     estimatedAssets,
     sharePrice,

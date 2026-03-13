@@ -71,6 +71,7 @@ export {
   redeemAsync,
   smartRedeem,
   bridgeSharesToHub,
+  quoteShareBridgeFee,
   bridgeAssetsToSpoke,
   resolveRedeemAddresses,
 } from './redeemFlows'
