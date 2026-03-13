@@ -1,5 +1,6 @@
 import {
   type Address,
+  type Hash,
   type PublicClient,
   type WalletClient,
   getAddress,
@@ -7,6 +8,40 @@ import {
 } from 'viem'
 import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TX receipt helper with retry — public RPCs can be slow, especially on Ethereum mainnet.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Wait for a transaction receipt with generous timeout and retry logic.
+ *
+ * Public RPCs often timeout before the TX is mined. This helper retries
+ * `waitForTransactionReceipt` up to 3 times with increasing timeouts,
+ * so the SDK doesn't crash on slow RPCs.
+ */
+export async function waitForTx(
+  publicClient: PublicClient,
+  hash: Hash,
+  maxRetries = 3,
+): Promise<void> {
+  const timeouts = [60_000, 120_000, 180_000] // 1min, 2min, 3min
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      await publicClient.waitForTransactionReceipt({
+        hash,
+        timeout: timeouts[i] ?? 180_000,
+      })
+      return
+    } catch (e: any) {
+      // If it's a timeout error, retry with longer timeout
+      if (e.name === 'WaitForTransactionReceiptTimeoutError' && i < maxRetries - 1) {
+        continue
+      }
+      throw e
+    }
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -323,7 +358,7 @@ export async function ensureAllowance(
       account,
       chain: walletClient.chain,
     })
-    await publicClient.waitForTransactionReceipt({ hash })
+    await waitForTx(publicClient, hash)
   }
 }
 

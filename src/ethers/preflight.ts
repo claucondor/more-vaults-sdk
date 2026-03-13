@@ -113,10 +113,11 @@ export async function preflightRedeemLiquidity(
   const underlying: string = await vaultContract.asset();
 
   const underlyingContract = new Contract(underlying, ERC20_ABI, provider);
-  // previewRedeem accounts for fees/slippage, unlike convertToAssets
+  // NOTE: previewRedeem reverts on async cross-chain vaults (disabled by design).
+  //       convertToAssets is always safe and gives a correct lower-bound estimate.
   const [hubLiquid, assetsNeeded]: [bigint, bigint] = await Promise.all([
     underlyingContract.balanceOf(vault),
-    vaultContract.previewRedeem(shares),
+    vaultContract.convertToAssets(shares),
   ]);
 
   if (hubLiquid < assetsNeeded) {

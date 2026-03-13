@@ -191,9 +191,10 @@ export async function getInboundRoutes(
     // Does this OFT deliver the right asset to the hub?
     if (getAddress(hubEntry.token) !== getAddress(vaultAsset)) continue
 
-    // Determine oftCmd — Stargate v2 pools need taxi cmd (0x01), standard OFTs use empty (0x)
-    const STARGATE_ASSETS = new Set(['stgUSDC', 'USDT', 'WETH'])
-    const oftCmd: `0x${string}` = STARGATE_ASSETS.has(symbol) ? '0x01' : '0x'
+    // oftCmd for OFT compose deposits: always '0x' (TAXI mode = immediate delivery with composeMsg).
+    // Stargate V2 semantics: '0x' = TAXI (supports composeMsg), '0x01' = BUS (no composeMsg).
+    // depositFromSpoke internally uses resolveOftCmd() which returns '0x' — match that here.
+    const oftCmd: `0x${string}` = '0x'
 
     // Only check chains where the vault has a registered spoke
     // (composer needs to send shares back — requires a spoke vault on that chain)
