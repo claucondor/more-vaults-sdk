@@ -83,9 +83,10 @@ export {
   quoteLzFee,
   isAsyncMode,
   getAsyncRequestStatus,
+  waitForAsyncRequest,
   getVaultStatus,
 } from './utils'
-export type { VaultStatus, VaultMode } from './utils'
+export type { VaultStatus, VaultMode, AsyncRequestFinalResult } from './utils'
 
 // --- Pre-flight validation ---
 export { preflightSync, preflightAsync, preflightRedeemLiquidity, preflightSpokeDeposit, preflightSpokeRedeem } from './preflight'

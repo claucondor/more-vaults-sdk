@@ -437,7 +437,7 @@ export async function getAsyncRequestStatus(
   publicClient: PublicClient,
   vault: Address,
   guid: `0x${string}`,
-): Promise<{ fulfilled: boolean; finalized: boolean; result: bigint }> {
+): Promise<{ fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }> {
   const info = (await publicClient.readContract({
     address: getAddress(vault),
     abi: BRIDGE_ABI,
@@ -455,6 +455,70 @@ export async function getAsyncRequestStatus(
   return {
     fulfilled: info.fulfilled,
     finalized: info.finalized,
+    refunded: info.refunded,
     result: finalizationResult,
   }
+}
+
+export interface AsyncRequestFinalResult {
+  /** 'completed' = assets/shares received, 'refunded' = tokens returned to user */
+  status: 'completed' | 'refunded'
+  /** For deposit: shares minted. For redeem: assets returned. 0 if refunded. */
+  result: bigint
+}
+
+/**
+ * Poll an async cross-chain request until it finalizes or times out.
+ *
+ * This is the correct way to wait for smartDeposit/smartRedeem results on
+ * async vaults. Do NOT poll balance — use this instead, which reads the
+ * on-chain request state by GUID.
+ *
+ * @param publicClient  Public client on the hub chain
+ * @param vault         Vault address
+ * @param guid          GUID from smartDeposit/smartRedeem result
+ * @param pollInterval  Milliseconds between polls (default: 30_000)
+ * @param timeout       Max wait time in milliseconds (default: 900_000 = 15 min)
+ * @param onPoll        Optional callback invoked after each poll with current status
+ * @returns             Final result with status and amount
+ * @throws              Error if timeout is reached
+ *
+ * @example
+ * const depositResult = await smartDeposit(walletClient, publicClient, { vault }, amount, receiver)
+ * if ('guid' in depositResult) {
+ *   const final = await waitForAsyncRequest(publicClient, vault, depositResult.guid, 30_000, 900_000, (s) => {
+ *     console.log(`Status: fulfilled=${s.fulfilled}, finalized=${s.finalized}`)
+ *   })
+ *   console.log(`Done: ${final.status}, result: ${final.result}`)
+ * }
+ */
+export async function waitForAsyncRequest(
+  publicClient: PublicClient,
+  vault: Address,
+  guid: `0x${string}`,
+  pollInterval: number = 30_000,
+  timeout: number = 900_000,
+  onPoll?: (status: { fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }) => void,
+): Promise<AsyncRequestFinalResult> {
+  const deadline = Date.now() + timeout
+
+  while (Date.now() < deadline) {
+    const status = await getAsyncRequestStatus(publicClient, vault, guid)
+
+    if (onPoll) onPoll(status)
+
+    if (status.finalized) {
+      return { status: 'completed', result: status.result }
+    }
+    if (status.refunded) {
+      return { status: 'refunded', result: 0n }
+    }
+
+    await new Promise(r => setTimeout(r, pollInterval))
+  }
+
+  throw new Error(
+    `[MoreVaults] Async request ${guid} did not finalize within ${timeout / 1000}s. ` +
+    `The request may still complete — check https://layerzeroscan.com/tx/${guid}`,
+  )
 }
