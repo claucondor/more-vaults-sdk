@@ -1,12 +1,11 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { useChainId, usePublicClient } from 'wagmi'
 import type { Address, PublicClient } from 'viem'
-import { asSdkClient } from '../viem/wagmiCompat.js'
 import { getVaultDistribution } from '../viem/distribution.js'
 import type { VaultDistribution } from '../viem/distribution.js'
 import { createChainClient } from '../viem/spokeRoutes.js'
-import { useVaultTopology } from './useVaultTopology.js'
+import { discoverVaultTopology } from '../viem/topology.js'
+import type { VaultTopology } from '../viem/topology.js'
 
 export type { VaultDistribution }
 
@@ -18,9 +17,9 @@ interface UseVaultDistributionReturn {
 /**
  * Read the full cross-chain capital distribution of a vault.
  *
- * Uses the connected wallet's chain as the hub client (via wagmi),
- * discovers spoke chains via topology, and creates ephemeral public
- * clients with fallback RPCs for spoke reads (all supported chains covered).
+ * Discovers the vault topology automatically via `discoverVaultTopology`
+ * (works without a connected wallet), then creates hub and spoke clients
+ * via public RPCs.
  *
  * Spoke reads that fail (bad RPC, timeout) degrade gracefully —
  * those spokes will appear with `isReachable: false`.
@@ -37,13 +36,15 @@ interface UseVaultDistributionReturn {
 export function useVaultDistribution(
   vault: Address | undefined,
 ): UseVaultDistributionReturn {
-  const chainId = useChainId()
-  const publicClient = usePublicClient()
-  const { topology } = useVaultTopology(vault)
+  // Step 1: discover topology (wallet-independent)
+  const { data: topology } = useQuery<VaultTopology>({
+    queryKey: ['vaultTopology', vault],
+    queryFn: () => discoverVaultTopology(vault!),
+    enabled: !!vault,
+    staleTime: 5 * 60 * 1000,
+  })
 
-  // Build spoke clients using the shared fallback-RPC factory from spokeRoutes.
-  // Covers all supported chains (Eth, Arb, Op, BSC, Sonic, Flow) with multiple
-  // fallback endpoints each — spokes without a known RPC degrade to isReachable: false.
+  // Build spoke clients from topology
   const spokeClients = useMemo((): Record<number, PublicClient> => {
     if (!topology) return {}
     const clients: Record<number, PublicClient> = {}
@@ -54,15 +55,15 @@ export function useVaultDistribution(
     return clients
   }, [topology])
 
+  // Step 2: fetch distribution using hub-chain client (not wallet client)
   const { data: distribution, isLoading } = useQuery<VaultDistribution>({
-    queryKey: ['vaultDistribution', vault, chainId],
-    queryFn: () =>
-      getVaultDistribution(
-        asSdkClient(publicClient),
-        vault!,
-        spokeClients,
-      ),
-    enabled: !!vault && !!publicClient,
+    queryKey: ['vaultDistribution', vault, topology?.hubChainId],
+    queryFn: () => {
+      const hubClient = createChainClient(topology!.hubChainId)
+      if (!hubClient) throw new Error(`No public RPC for hub chainId ${topology!.hubChainId}`)
+      return getVaultDistribution(hubClient as PublicClient, vault!, spokeClients)
+    },
+    enabled: !!vault && !!topology && topology.role !== 'local',
     staleTime: 30_000,
   })
 
