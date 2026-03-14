@@ -5,3 +5,4 @@ tests/addresses.json
 .env
 .npmrc
 _*.ts
+TO_ANALYZE.md

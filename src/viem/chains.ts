@@ -89,12 +89,25 @@ export const OFT_ROUTES = {
     [10    /* optimism        */]: { oft: '0x19cFCE47eD54a88614648DC3f19A5980097007dD' as `0x${string}`, token: '0x94b008aA00579c1307B0EF2c499aD98a8ce58e58' as `0x${string}` },
   },
   /**
-   * PYUSD — PayPal USD OFT (issued by PayPal/Flow).
+   * USDF — USD Flow OFT. Bridges PYUSD (Ethereum) ↔ USDF (Flow EVM).
+   * On Ethereum: underlying is PayPal USD (PYUSD, 0x6c3ea9...).
+   * On Flow: the OFT itself IS the token (USDF, 0x2aabea...).
    * Routes verified: Eth→Flow ✓
    */
-  PYUSD: {
+  USDF: {
     [747   /* flowEVMMainnet */]: { oft: '0x2aabea2058b5ac2d339b163c6ab6f2b6d53aabed' as `0x${string}`, token: '0x2aabea2058b5ac2d339b163c6ab6f2b6d53aabed' as `0x${string}` },
     [1     /* ethereum       */]: { oft: '0xfa0e06b54986ad96de87a8c56fea76fbd8d493f8' as `0x${string}`, token: '0x6c3ea9036406852006290770BEdFcAbA0e23A0e8' as `0x${string}` },
+  },
+  /**
+   * PYUSD — PayPal USD bridged via OFTAdapter (Paxos / LayerZero).
+   * Lock/mint architecture: locks PYUSD on Arbitrum, mints PYUSD0 on Flow EVM.
+   * On Arbitrum: OFTAdapter wraps native PYUSD (0x46850a...).
+   * On Flow: OFTAdapter wraps PYUSD0 (0x99aF3E...), which is the native Paxos token.
+   * Routes verified: Arb↔Flow ✓ (EID 30336). No Eth or Base peers.
+   */
+  PYUSD: {
+    [747   /* flowEVMMainnet */]: { oft: '0x26d27d5AF2F6f1c14F40013C8619d97aaf015509' as `0x${string}`, token: '0x99aF3EeA856556646C98c8B9b2548Fe815240750' as `0x${string}` },
+    [42161 /* arbitrum       */]: { oft: '0x3CD2b89C49D130C08f1d683225b2e5DeB63ff876' as `0x${string}`, token: '0x46850aD61C2B7d64d08c9C754F45254596696984' as `0x${string}` },
   },
   /**
    * WFLOW — Wrapped FLOW NativeOFTAdapter (issued by Flow Foundation).
@@ -217,7 +230,7 @@ export const OFT_ROUTES = {
 /**
  * oftCmd for Stargate v2 taxi mode (immediate per-message delivery).
  * Pass as `oftCmd` in SendParam when using stgUSDC, USDT, or WETH OFT_ROUTES entries.
- * Non-Stargate OFTs (PYUSD, WFLOW, sUSDe, USDe, weETH, rsETH) use empty bytes — pass `'0x'` instead.
+ * Non-Stargate OFTs (USDF, WFLOW, sUSDe, USDe, weETH, rsETH) use empty bytes — pass `'0x'` instead.
  */
 export const STARGATE_TAXI_CMD = '0x01' as const
 
