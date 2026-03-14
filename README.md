@@ -127,7 +127,7 @@ LayerZero identifies chains by an **Endpoint ID (EID)** — different from the c
 | Ethereum | 1 | 30101 |
 | Arbitrum | 42161 | 30110 |
 | Base | 8453 | 30184 |
-| Flow EVM | 747 | 30332 |
+| Flow EVM | 747 | 30336 |
 
 ### GUID (async request ID)
 
@@ -330,6 +330,30 @@ Full reference: [docs/user-helpers.md](./docs/user-helpers.md)
 | `getOutboundRoutes` | All routes for spoke redeem (which chains to bridge back to) |
 | `quoteRouteDepositFee` | LZ fee for a specific inbound route |
 | `resolveRedeemAddresses` | Discover SHARE_OFT, asset OFT, spoke asset for a redeem route |
+
+### Curator operations (vault manager)
+
+Full reference: [docs/curator-operations.md](./docs/curator-operations.md)
+
+| Function | Description |
+|----------|-------------|
+| `getCuratorVaultStatus` | Full status snapshot: curator address, timelock, slippage, nonce, available assets, LZ adapter |
+| `getPendingActions` | Pending actions for a given nonce, with `isExecutable` flag (timelock check) |
+| `isCurator` | Check if an address is the vault's curator |
+
+```ts
+import { getCuratorVaultStatus, isCurator } from '@oydual31/more-vaults-sdk/viem'
+
+const status = await getCuratorVaultStatus(publicClient, VAULT)
+// status.curator         — curator address
+// status.timeLockPeriod  — seconds (0 = immediate execution)
+// status.currentNonce    — latest action nonce
+// status.availableAssets — whitelisted tokens
+// status.lzAdapter       — cross-chain accounting manager
+// status.paused          — vault paused state
+
+const isManager = await isCurator(publicClient, VAULT, myAddress)
+```
 
 ### Topology & distribution
 

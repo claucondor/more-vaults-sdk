@@ -13,6 +13,12 @@ export {
   OFT_ABI,
   METADATA_ABI,
   LZ_ENDPOINT_ABI,
+  MULTICALL_ABI,
+  DEX_ABI,
+  BRIDGE_FACET_ABI,
+  ERC7540_FACET_ABI,
+  CURATOR_CONFIG_ABI,
+  LZ_ADAPTER_ABI,
 } from './abis'
 
 // --- Types ---
@@ -25,6 +31,13 @@ export type {
   ActionTypeValue,
   ComposeData,
   SpokeDepositResult,
+  SwapParams,
+  BatchSwapParams,
+  BridgeParams,
+  PendingAction,
+  SubmitActionsResult,
+  CuratorAction,
+  CuratorVaultStatus,
 } from './types'
 export { ActionType } from './types'
 
@@ -136,6 +149,13 @@ export type { VaultDistribution, SpokeBalance } from './distribution'
 // --- Spoke Routes ---
 export { getInboundRoutes, getUserBalancesForRoutes, getOutboundRoutes, quoteRouteDepositFee, NATIVE_SYMBOL } from './spokeRoutes'
 export type { InboundRoute, InboundRouteWithBalance, OutboundRoute } from './spokeRoutes'
+
+// --- Curator Operations ---
+export {
+  getCuratorVaultStatus,
+  getPendingActions,
+  isCurator,
+} from './curatorStatus'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.

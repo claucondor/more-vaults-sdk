@@ -98,3 +98,60 @@ export interface CrossChainRequestInfo {
   finalizationResult: bigint
   amountLimit: bigint
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Curator Operations Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SwapParams {
+  targetContract: Address
+  tokenIn: Address
+  tokenOut: Address
+  maxAmountIn: bigint
+  minAmountOut: bigint
+  swapCallData: `0x${string}`
+}
+
+export interface BatchSwapParams {
+  swaps: SwapParams[]
+}
+
+export interface BridgeParams {
+  oftToken: Address
+  dstEid: number
+  amount: bigint
+  dstVault: Address
+  refundAddress: Address
+}
+
+export interface PendingAction {
+  nonce: bigint
+  actionsData: `0x${string}`[]
+  pendingUntil: bigint
+  isExecutable: boolean
+}
+
+export interface SubmitActionsResult {
+  txHash: `0x${string}`
+  nonce: bigint
+}
+
+export type CuratorAction =
+  | { type: 'swap'; params: SwapParams }
+  | { type: 'batchSwap'; params: BatchSwapParams }
+  | { type: 'erc4626Deposit'; vault: Address; assets: bigint }
+  | { type: 'erc4626Redeem'; vault: Address; shares: bigint }
+  | { type: 'erc7540RequestDeposit'; vault: Address; assets: bigint }
+  | { type: 'erc7540Deposit'; vault: Address; assets: bigint }
+  | { type: 'erc7540RequestRedeem'; vault: Address; shares: bigint }
+  | { type: 'erc7540Redeem'; vault: Address; shares: bigint }
+
+export interface CuratorVaultStatus {
+  curator: Address
+  timeLockPeriod: bigint
+  maxSlippagePercent: bigint
+  currentNonce: bigint
+  availableAssets: Address[]
+  lzAdapter: Address
+  paused: boolean
+}

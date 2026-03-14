@@ -451,6 +451,284 @@ export const OFT_ABI = [
   },
 ] as const
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Curator Operations ABIs
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * MulticallFacet ABI — curator action submission and execution with timelock.
+ */
+export const MULTICALL_ABI = [
+  {
+    type: 'function',
+    name: 'submitActions',
+    inputs: [
+      { name: 'actionsData', type: 'bytes[]' },
+    ],
+    outputs: [{ name: 'nonce', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'executeActions',
+    inputs: [
+      { name: 'actionsNonce', type: 'uint256' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'getPendingActions',
+    inputs: [
+      { name: 'actionsNonce', type: 'uint256' },
+    ],
+    outputs: [
+      { name: 'actionsData', type: 'bytes[]' },
+      { name: 'pendingUntil', type: 'uint256' },
+    ],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getCurrentNonce',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'vetoActions',
+    inputs: [
+      { name: 'actionsNonces', type: 'uint256[]' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
+/**
+ * GenericDexFacet ABI — single and batch token swaps through any DEX aggregator.
+ */
+export const DEX_ABI = [
+  {
+    type: 'function',
+    name: 'executeSwap',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          { name: 'targetContract', type: 'address' },
+          { name: 'tokenIn', type: 'address' },
+          { name: 'tokenOut', type: 'address' },
+          { name: 'maxAmountIn', type: 'uint256' },
+          { name: 'minAmountOut', type: 'uint256' },
+          { name: 'swapCallData', type: 'bytes' },
+        ],
+      },
+    ],
+    outputs: [{ name: 'amountOut', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'executeBatchSwap',
+    inputs: [
+      {
+        name: 'params',
+        type: 'tuple',
+        components: [
+          {
+            name: 'swaps',
+            type: 'tuple[]',
+            components: [
+              { name: 'targetContract', type: 'address' },
+              { name: 'tokenIn', type: 'address' },
+              { name: 'tokenOut', type: 'address' },
+              { name: 'maxAmountIn', type: 'uint256' },
+              { name: 'minAmountOut', type: 'uint256' },
+              { name: 'swapCallData', type: 'bytes' },
+            ],
+          },
+        ],
+      },
+    ],
+    outputs: [{ name: 'amountsOut', type: 'uint256[]' }],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
+/**
+ * BridgeFacet ABI — curator bridging and cross-chain request initiation.
+ * (extends the existing BRIDGE_ABI with curator-specific functions)
+ */
+export const BRIDGE_FACET_ABI = [
+  {
+    type: 'function',
+    name: 'executeBridging',
+    inputs: [
+      { name: 'adapter', type: 'address' },
+      { name: 'token', type: 'address' },
+      { name: 'amount', type: 'uint256' },
+      { name: 'bridgeSpecificParams', type: 'bytes' },
+    ],
+    outputs: [],
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
+    name: 'initVaultActionRequest',
+    inputs: [
+      { name: 'actionType', type: 'uint8' },
+      { name: 'actionCallData', type: 'bytes' },
+      { name: 'amountLimit', type: 'uint256' },
+      { name: 'extraOptions', type: 'bytes' },
+    ],
+    outputs: [{ name: 'guid', type: 'bytes32' }],
+    stateMutability: 'payable',
+  },
+  {
+    type: 'function',
+    name: 'executeRequest',
+    inputs: [
+      { name: 'guid', type: 'bytes32' },
+    ],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
+/**
+ * ERC7540Facet ABI — async deposit and redeem operations on ERC7540 vaults.
+ */
+export const ERC7540_FACET_ABI = [
+  {
+    type: 'function',
+    name: 'erc7540RequestDeposit',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'assets', type: 'uint256' },
+    ],
+    outputs: [{ name: 'requestId', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'erc7540RequestRedeem',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'shares', type: 'uint256' },
+    ],
+    outputs: [{ name: 'requestId', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'erc7540Deposit',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'assets', type: 'uint256' },
+    ],
+    outputs: [{ name: 'shares', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'erc7540Redeem',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'shares', type: 'uint256' },
+    ],
+    outputs: [{ name: 'assets', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
+/**
+ * ConfigurationFacet ABI — extended with curator-relevant read functions.
+ * Augments the existing CONFIG_ABI with additional getters needed by curator dashboard.
+ */
+export const CURATOR_CONFIG_ABI = [
+  {
+    type: 'function',
+    name: 'curator',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'timeLockPeriod',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getAvailableAssets',
+    inputs: [],
+    outputs: [{ name: '', type: 'address[]' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getMaxSlippagePercent',
+    inputs: [],
+    outputs: [{ name: '', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'getCrossChainAccountingManager',
+    inputs: [],
+    outputs: [{ name: '', type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'paused',
+    inputs: [],
+    outputs: [{ name: '', type: 'bool' }],
+    stateMutability: 'view',
+  },
+] as const
+
+/**
+ * LzAdapter ABI — fee quoting for bridge and LZ Read operations.
+ */
+export const LZ_ADAPTER_ABI = [
+  {
+    type: 'function',
+    name: 'quoteBridgeFee',
+    inputs: [
+      { name: 'bridgeSpecificParams', type: 'bytes' },
+    ],
+    outputs: [{ name: 'nativeFee', type: 'uint256' }],
+    stateMutability: 'view',
+  },
+  {
+    type: 'function',
+    name: 'quoteReadFee',
+    inputs: [
+      { name: 'vaults', type: 'address[]' },
+      { name: 'eids', type: 'uint32[]' },
+      { name: '_extraOptions', type: 'bytes' },
+    ],
+    outputs: [
+      {
+        name: 'fee',
+        type: 'tuple',
+        components: [
+          { name: 'nativeFee', type: 'uint256' },
+          { name: 'lzTokenFee', type: 'uint256' },
+        ],
+      },
+    ],
+    stateMutability: 'view',
+  },
+] as const
+
 /**
  * Minimal LZ Endpoint V2 ABI for compose queue management.
  * Used by the Stargate 2-TX flow to check compose status and execute pending composes.

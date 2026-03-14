@@ -6,3 +6,5 @@ tests/addresses.json
 .npmrc
 _*.ts
 TO_ANALYZE.md
+CROSS_CHAIN_UX_OPTIONS.md
+CURATOR_SDK_PLAN.md
