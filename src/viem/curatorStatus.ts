@@ -6,8 +6,8 @@
  */
 
 import { type Address, type PublicClient, getAddress } from 'viem'
-import { MULTICALL_ABI, CURATOR_CONFIG_ABI } from './abis.js'
-import type { CuratorVaultStatus, PendingAction } from './types.js'
+import { MULTICALL_ABI, CURATOR_CONFIG_ABI, VAULT_ANALYSIS_ABI, REGISTRY_ABI, METADATA_ABI } from './abis.js'
+import type { CuratorVaultStatus, PendingAction, VaultAnalysis, AssetInfo } from './types.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -122,3 +122,134 @@ export async function isCurator(
 
   return getAddress(curatorAddress as Address) === getAddress(address)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Full vault analysis — available assets with metadata, depositable assets, whitelist config.
+ * Useful for curator dashboards to understand what the vault can do.
+ *
+ * @param publicClient  Viem public client (must be on the vault's chain)
+ * @param vault         Vault address (diamond proxy)
+ * @returns             VaultAnalysis snapshot
+ */
+export async function getVaultAnalysis(
+  publicClient: PublicClient,
+  vault: Address,
+): Promise<VaultAnalysis> {
+  const v = getAddress(vault)
+
+  // Batch 1: fetch asset lists, whitelist flag, and registry address in parallel
+  const [availableRaw, depositableRaw, depositWhitelistEnabled, registryResult] =
+    await Promise.all([
+      publicClient.readContract({
+        address: v,
+        abi: VAULT_ANALYSIS_ABI,
+        functionName: 'getAvailableAssets',
+      }),
+      publicClient.readContract({
+        address: v,
+        abi: VAULT_ANALYSIS_ABI,
+        functionName: 'getDepositableAssets',
+      }),
+      publicClient.readContract({
+        address: v,
+        abi: VAULT_ANALYSIS_ABI,
+        functionName: 'isDepositWhitelistEnabled',
+      }),
+      publicClient.readContract({
+        address: v,
+        abi: VAULT_ANALYSIS_ABI,
+        functionName: 'moreVaultsRegistry',
+      }).catch(() => null),
+    ])
+
+  const availableAddresses = (availableRaw as Address[]).map(getAddress)
+  const depositableAddresses = (depositableRaw as Address[]).map(getAddress)
+
+  // Deduplicated set of all asset addresses we need metadata for
+  const allAddresses = Array.from(new Set([...availableAddresses, ...depositableAddresses]))
+
+  // Batch 2: multicall for name/symbol/decimals on all unique assets
+  const metadataCalls = allAddresses.flatMap((addr) => [
+    { address: addr, abi: METADATA_ABI, functionName: 'name' as const },
+    { address: addr, abi: METADATA_ABI, functionName: 'symbol' as const },
+    { address: addr, abi: METADATA_ABI, functionName: 'decimals' as const },
+  ])
+
+  const metadataResults = allAddresses.length > 0
+    ? await publicClient.multicall({ contracts: metadataCalls, allowFailure: true })
+    : []
+
+  // Map address → AssetInfo
+  const assetInfoMap = new Map<Address, AssetInfo>()
+  for (let i = 0; i < allAddresses.length; i++) {
+    const addr = allAddresses[i]
+    const nameResult    = metadataResults[i * 3]
+    const symbolResult  = metadataResults[i * 3 + 1]
+    const decimalsResult = metadataResults[i * 3 + 2]
+
+    assetInfoMap.set(addr, {
+      address: addr,
+      name:     nameResult?.status === 'success'     ? (nameResult.result as string)  : '',
+      symbol:   symbolResult?.status === 'success'   ? (symbolResult.result as string) : '',
+      decimals: decimalsResult?.status === 'success' ? (decimalsResult.result as number) : 18,
+    })
+  }
+
+  const registryAddress = registryResult ? getAddress(registryResult as Address) : null
+
+  return {
+    availableAssets:       availableAddresses.map((a) => assetInfoMap.get(a)!),
+    depositableAssets:     depositableAddresses.map((a) => assetInfoMap.get(a)!),
+    depositWhitelistEnabled: depositWhitelistEnabled as boolean,
+    registryAddress,
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Check if specific protocol addresses are whitelisted in the global registry.
+ * Useful for curators to verify DEX routers before building swap calldata.
+ *
+ * @param publicClient  Viem public client (must be on the vault's chain)
+ * @param vault         Vault address (diamond proxy)
+ * @param protocols     Protocol addresses to check
+ * @returns             Record mapping address → whitelisted boolean
+ */
+export async function checkProtocolWhitelist(
+  publicClient: PublicClient,
+  vault: Address,
+  protocols: Address[],
+): Promise<Record<string, boolean>> {
+  const v = getAddress(vault)
+
+  const registryRaw = await publicClient.readContract({
+    address: v,
+    abi: VAULT_ANALYSIS_ABI,
+    functionName: 'moreVaultsRegistry',
+  })
+
+  const registry = getAddress(registryRaw as Address)
+
+  if (protocols.length === 0) return {}
+
+  const results = await publicClient.multicall({
+    contracts: protocols.map((protocol) => ({
+      address: registry,
+      abi: REGISTRY_ABI,
+      functionName: 'isWhitelisted' as const,
+      args: [getAddress(protocol)] as [Address],
+    })),
+    allowFailure: true,
+  })
+
+  const out: Record<string, boolean> = {}
+  for (let i = 0; i < protocols.length; i++) {
+    const r = results[i]
+    out[getAddress(protocols[i])] = r?.status === 'success' ? (r.result as boolean) : false
+  }
+  return out
+}
+

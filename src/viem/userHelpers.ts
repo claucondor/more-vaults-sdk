@@ -1,5 +1,5 @@
 import { type Address, type PublicClient, getAddress } from 'viem'
-import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI, OFT_ABI } from './abis'
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI, OFT_ABI, VAULT_ANALYSIS_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
 import { getVaultStatus } from './utils'
 import type { VaultStatus } from './utils'
@@ -140,6 +140,10 @@ export type DepositBlockReason = 'paused' | 'capacity-full' | 'not-whitelisted' 
 export interface DepositEligibility {
   allowed: boolean
   reason: DepositBlockReason
+  /** Max deposit amount for this user (0n if capacity full or not whitelisted) */
+  maxDeposit?: bigint
+  /** Whether the vault restricts deposits to whitelisted addresses */
+  whitelistEnabled?: boolean
 }
 
 /**
@@ -167,15 +171,27 @@ export async function canDeposit(
     allowFailure: false,
   })
 
+  // Read whitelist status (may revert on older vaults — default to false)
+  let whitelistEnabled = false
+  try {
+    whitelistEnabled = await publicClient.readContract({
+      address: v,
+      abi: VAULT_ANALYSIS_ABI,
+      functionName: 'isDepositWhitelistEnabled',
+    }) as boolean
+  } catch {
+    // Older vaults may not have this function
+  }
+
   if (isPaused) {
-    return { allowed: false, reason: 'paused' }
+    return { allowed: false, reason: 'paused', whitelistEnabled }
   }
 
   // Cross-chain async hubs revert on maxDeposit — this is expected, not a whitelist block.
   // The vault accepts deposits via initVaultActionRequest instead of the standard ERC-4626 path.
   const isCrossChainAsync = isHub && !oraclesEnabled
   if (isCrossChainAsync) {
-    return { allowed: true, reason: 'ok' }
+    return { allowed: true, reason: 'ok', whitelistEnabled }
   }
 
   // maxDeposit(user) can REVERT on vaults with whitelist/ACL
@@ -189,13 +205,13 @@ export async function canDeposit(
     })
   } catch {
     // Revert means the vault has whitelist/ACL and this user is not approved
-    return { allowed: false, reason: 'not-whitelisted' }
+    return { allowed: false, reason: 'not-whitelisted', maxDeposit: 0n, whitelistEnabled }
   }
 
   if (maxDepositAmount === 0n) {
-    return { allowed: false, reason: 'capacity-full' }
+    return { allowed: false, reason: 'capacity-full', maxDeposit: 0n, whitelistEnabled }
   }
-  return { allowed: true, reason: 'ok' }
+  return { allowed: true, reason: 'ok', maxDeposit: maxDepositAmount, whitelistEnabled }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

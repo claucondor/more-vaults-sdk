@@ -17,8 +17,11 @@ export {
   DEX_ABI,
   BRIDGE_FACET_ABI,
   ERC7540_FACET_ABI,
+  ERC4626_FACET_ABI,
   CURATOR_CONFIG_ABI,
   LZ_ADAPTER_ABI,
+  VAULT_ANALYSIS_ABI,
+  REGISTRY_ABI,
 } from './abis'
 
 // --- Types ---
@@ -38,6 +41,8 @@ export type {
   SubmitActionsResult,
   CuratorAction,
   CuratorVaultStatus,
+  AssetInfo,
+  VaultAnalysis,
 } from './types'
 export { ActionType } from './types'
 
@@ -155,7 +160,16 @@ export {
   getCuratorVaultStatus,
   getPendingActions,
   isCurator,
+  getVaultAnalysis,
+  checkProtocolWhitelist,
 } from './curatorStatus'
+export {
+  encodeCuratorAction,
+  buildCuratorBatch,
+  submitActions,
+  executeActions,
+  vetoActions,
+} from './curatorMulticall'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.

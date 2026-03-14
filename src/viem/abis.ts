@@ -730,6 +730,57 @@ export const LZ_ADAPTER_ABI = [
 ] as const
 
 /**
+ * ERC4626Facet ABI — synchronous deposit and redeem into whitelisted ERC-4626 vaults.
+ */
+export const ERC4626_FACET_ABI = [
+  {
+    type: 'function',
+    name: 'erc4626Deposit',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'assets', type: 'uint256' },
+    ],
+    outputs: [{ name: 'shares', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+  {
+    type: 'function',
+    name: 'erc4626Redeem',
+    inputs: [
+      { name: 'vault', type: 'address' },
+      { name: 'shares', type: 'uint256' },
+    ],
+    outputs: [{ name: 'assets', type: 'uint256' }],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
+/**
+ * Vault analysis ABIs — per-vault whitelist and registry reads.
+ */
+export const VAULT_ANALYSIS_ABI = [
+  // Asset management reads
+  { type: 'function', name: 'getAvailableAssets', inputs: [], outputs: [{ type: 'address[]' }], stateMutability: 'view' },
+  { type: 'function', name: 'getDepositableAssets', inputs: [], outputs: [{ type: 'address[]' }], stateMutability: 'view' },
+  { type: 'function', name: 'isAssetAvailable', inputs: [{ name: 'asset', type: 'address' }], outputs: [{ type: 'bool' }], stateMutability: 'view' },
+  { type: 'function', name: 'isAssetDepositable', inputs: [{ name: 'asset', type: 'address' }], outputs: [{ type: 'bool' }], stateMutability: 'view' },
+  // Deposit whitelist
+  { type: 'function', name: 'isDepositWhitelistEnabled', inputs: [], outputs: [{ type: 'bool' }], stateMutability: 'view' },
+  { type: 'function', name: 'getAvailableToDeposit', inputs: [{ name: 'depositor', type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view' },
+  // Registry
+  { type: 'function', name: 'moreVaultsRegistry', inputs: [], outputs: [{ type: 'address' }], stateMutability: 'view' },
+] as const
+
+/**
+ * MoreVaultsRegistry ABI — global protocol and bridge whitelist checks.
+ */
+export const REGISTRY_ABI = [
+  { type: 'function', name: 'isWhitelisted', inputs: [{ name: 'protocol', type: 'address' }], outputs: [{ type: 'bool' }], stateMutability: 'view' },
+  { type: 'function', name: 'isBridgeAllowed', inputs: [{ name: 'bridge', type: 'address' }], outputs: [{ type: 'bool' }], stateMutability: 'view' },
+  { type: 'function', name: 'getAllowedFacets', inputs: [], outputs: [{ type: 'address[]' }], stateMutability: 'view' },
+] as const
+
+/**
  * Minimal LZ Endpoint V2 ABI for compose queue management.
  * Used by the Stargate 2-TX flow to check compose status and execute pending composes.
  */

@@ -155,3 +155,25 @@ export interface CuratorVaultStatus {
   lzAdapter: Address
   paused: boolean
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vault Analysis Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AssetInfo {
+  address: Address
+  symbol: string
+  name: string
+  decimals: number
+}
+
+export interface VaultAnalysis {
+  /** All tokens the vault can hold/swap (curator-managed) */
+  availableAssets: AssetInfo[]
+  /** Tokens users can deposit */
+  depositableAssets: AssetInfo[]
+  /** Whether deposit whitelist is enabled (restricts who can deposit) */
+  depositWhitelistEnabled: boolean
+  /** Registry address for global protocol whitelist checks */
+  registryAddress: Address | null
+}
