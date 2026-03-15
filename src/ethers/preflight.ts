@@ -8,8 +8,11 @@
 
 import { Contract, ZeroAddress } from "ethers";
 import type { Provider } from "ethers";
-import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI } from "./abis";
+import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI, OFT_ABI } from "./abis";
 import { InsufficientLiquidityError } from "./errors";
+import { detectStargateOft } from "./utils";
+import { EID_TO_CHAIN_ID, createChainProvider } from "./chains";
+import { quoteComposeFee } from "./crossChainFlows";
 
 /**
  * Pre-flight checks for async cross-chain flows (D4 / D5 / R5).
@@ -163,4 +166,225 @@ export async function preflightSync(
       `[MoreVaults] Vault ${vault} has reached deposit capacity. No more deposits accepted.`
     );
   }
+}
+
+/**
+ * Pre-flight checks for spoke-to-hub deposits (D6 / D7 via OFT Compose).
+ *
+ * Validates that:
+ * 1. User has enough tokens on the spoke chain to deposit.
+ * 2. User has enough native gas on the spoke chain for TX1 (OFT.send).
+ * 3. For Stargate OFTs (2-TX flow): user has enough ETH on the hub chain for TX2.
+ *
+ * @param spokeProvider  Read-only provider on the SPOKE chain
+ * @param vault          Vault address
+ * @param spokeOFT       OFT contract address on the spoke chain
+ * @param hubEid         LZ EID for the hub chain
+ * @param spokeEid       LZ EID for the spoke chain
+ * @param amount         Amount of tokens to deposit
+ * @param userAddress    User's wallet address
+ * @param lzFee          LZ fee for TX1 (from quoteDepositFromSpokeFee)
+ * @returns              Object with validated balances for UI display
+ */
+export async function preflightSpokeDeposit(
+  spokeProvider: Provider,
+  vault: string,
+  spokeOFT: string,
+  hubEid: number,
+  spokeEid: number,
+  amount: bigint,
+  userAddress: string,
+  lzFee: bigint,
+): Promise<{
+  spokeTokenBalance: bigint
+  spokeNativeBalance: bigint
+  hubNativeBalance: bigint
+  estimatedComposeFee: bigint
+  isStargate: boolean
+}> {
+  // Read the underlying token address from the OFT
+  const OFT_TOKEN_ABI = ["function token() view returns (address)"] as const;
+  const oftContract = new Contract(spokeOFT, OFT_TOKEN_ABI, spokeProvider);
+  const spokeToken: string = await oftContract.token();
+
+  // Check token balance + native balance on spoke in parallel
+  const tokenContract = new Contract(spokeToken, ERC20_ABI, spokeProvider);
+  const [spokeTokenBalance, spokeNativeBalance]: [bigint, bigint] = await Promise.all([
+    tokenContract.balanceOf(userAddress),
+    spokeProvider.getBalance(userAddress),
+  ]);
+
+  // 1. Check token balance
+  if (spokeTokenBalance < amount) {
+    throw new Error(
+      `[MoreVaults] Insufficient token balance on spoke chain.\n` +
+      `  Need:  ${amount}\n` +
+      `  Have:  ${spokeTokenBalance}\n` +
+      `  Token: ${spokeToken}`,
+    );
+  }
+
+  // 2. Check native gas for TX1 (lzFee + gas buffer)
+  const gasBuffer = 500_000_000_000_000n; // 0.0005 ETH
+  if (spokeNativeBalance < lzFee + gasBuffer) {
+    throw new Error(
+      `[MoreVaults] Insufficient native gas on spoke chain for TX1.\n` +
+      `  Need:  ~${lzFee + gasBuffer} wei (LZ fee + gas)\n` +
+      `  Have:  ${spokeNativeBalance} wei`,
+    );
+  }
+
+  // 3. For Stargate OFTs: check ETH on hub for TX2 (compose retry)
+  const isStargate = await detectStargateOft(spokeProvider, spokeOFT);
+
+  let hubNativeBalance = 0n;
+  let estimatedComposeFee = 0n;
+
+  if (isStargate) {
+    const hubChainId = EID_TO_CHAIN_ID[hubEid];
+    const hubProvider = createChainProvider(hubChainId);
+    if (hubProvider) {
+      [hubNativeBalance, estimatedComposeFee] = await Promise.all([
+        hubProvider.getBalance(userAddress),
+        quoteComposeFee(hubProvider, vault, spokeEid, userAddress),
+      ]);
+
+      const hubGasBuffer = 300_000_000_000_000n; // 0.0003 ETH
+      const totalNeeded = estimatedComposeFee + hubGasBuffer;
+
+      if (hubNativeBalance < totalNeeded) {
+        throw new Error(
+          `[MoreVaults] Insufficient ETH on hub chain for TX2 (compose retry).\n` +
+          `  This is a Stargate 2-TX flow — TX2 requires ETH on the hub chain.\n` +
+          `  Need:  ~${totalNeeded} wei (compose fee ${estimatedComposeFee} + gas)\n` +
+          `  Have:  ${hubNativeBalance} wei\n` +
+          `  Short: ${totalNeeded - hubNativeBalance} wei\n` +
+          `  Send ETH to ${userAddress} on chainId ${hubChainId} before depositing.`,
+        );
+      }
+    }
+  }
+
+  return {
+    spokeTokenBalance,
+    spokeNativeBalance,
+    hubNativeBalance,
+    estimatedComposeFee,
+    isStargate,
+  };
+}
+
+/**
+ * Pre-flight checks for spoke→hub→spoke redeem (R6 + R1 + R7).
+ *
+ * Validates that:
+ * 1. User has shares on the spoke chain.
+ * 2. User has enough native gas on the spoke for TX1.
+ * 3. User has enough native gas on the hub for TX2 (redeem) + TX3 (asset bridge).
+ *
+ * @param route           SpokeRedeemRoute from resolveRedeemAddresses
+ * @param shares          Shares the user intends to redeem
+ * @param userAddress     User's wallet address
+ * @param shareBridgeFee  LZ fee for share bridge (TX1)
+ * @returns               Validated balances for UI display
+ */
+export async function preflightSpokeRedeem(
+  route: {
+    hubChainId: number
+    spokeChainId: number
+    hubEid: number
+    spokeEid: number
+    hubAsset: string
+    spokeShareOft: string
+    hubAssetOft: string
+    spokeAsset: string
+    isStargate: boolean
+  },
+  shares: bigint,
+  userAddress: string,
+  shareBridgeFee: bigint,
+): Promise<{
+  sharesOnSpoke: bigint
+  spokeNativeBalance: bigint
+  hubNativeBalance: bigint
+  estimatedAssetBridgeFee: bigint
+  estimatedAssetsOut: bigint
+  hubLiquidBalance: bigint
+}> {
+  const spokeProvider = createChainProvider(route.spokeChainId);
+  const hubProvider = createChainProvider(route.hubChainId);
+  if (!spokeProvider) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`);
+  if (!hubProvider) throw new Error(`No public RPC for hub chainId ${route.hubChainId}`);
+
+  // Parallel reads: shares on spoke, native balances
+  const spokeShareContract = new Contract(route.spokeShareOft, ERC20_ABI, spokeProvider);
+  const [sharesOnSpoke, spokeNativeBalance, hubNativeBalance]: [bigint, bigint, bigint] =
+    await Promise.all([
+      spokeShareContract.balanceOf(userAddress),
+      spokeProvider.getBalance(userAddress),
+      hubProvider.getBalance(userAddress),
+    ]);
+
+  // 1. Check shares
+  if (sharesOnSpoke < shares) {
+    throw new Error(
+      `[MoreVaults] Insufficient shares on spoke chain.\n` +
+      `  Need:  ${shares}\n` +
+      `  Have:  ${sharesOnSpoke}\n` +
+      `  Token: ${route.spokeShareOft}`,
+    );
+  }
+
+  // 2. Check spoke gas for TX1
+  const spokeGasBuffer = 500_000_000_000_000n; // 0.0005 ETH
+  if (spokeNativeBalance < shareBridgeFee + spokeGasBuffer) {
+    throw new Error(
+      `[MoreVaults] Insufficient native gas on spoke for TX1 (share bridge).\n` +
+      `  Need:  ~${shareBridgeFee + spokeGasBuffer} wei (LZ fee + gas)\n` +
+      `  Have:  ${spokeNativeBalance} wei`,
+    );
+  }
+
+  // 3. Estimate asset bridge fee (TX3) and check hub gas
+  let estimatedAssetBridgeFee = 0n;
+
+  try {
+    const toBytes32 = `0x${userAddress.replace(/^0x/, '').padStart(64, '0')}`;
+    const dummyAmount = 1_000_000n; // 1 USDC for fee estimation
+    const hubOft = new Contract(route.hubAssetOft, OFT_ABI, hubProvider);
+    const feeResult = await hubOft.quoteSend({
+      dstEid: route.spokeEid,
+      to: toBytes32,
+      amountLD: dummyAmount,
+      minAmountLD: dummyAmount * 99n / 100n,
+      extraOptions: "0x",
+      composeMsg: "0x",
+      oftCmd: route.isStargate ? "0x01" : "0x",
+    }, false);
+    estimatedAssetBridgeFee = feeResult.nativeFee as bigint;
+  } catch {
+    estimatedAssetBridgeFee = 300_000_000_000_000n; // 0.0003 ETH fallback
+  }
+
+  const hubGasBuffer = 300_000_000_000_000n; // 0.0003 ETH for gas (TX2 + TX3)
+  const totalHubNeeded = estimatedAssetBridgeFee + hubGasBuffer;
+
+  if (hubNativeBalance < totalHubNeeded) {
+    throw new Error(
+      `[MoreVaults] Insufficient ETH on hub chain for TX2 (redeem) + TX3 (asset bridge).\n` +
+      `  Need:  ~${totalHubNeeded} wei (LZ fee ${estimatedAssetBridgeFee} + gas)\n` +
+      `  Have:  ${hubNativeBalance} wei\n` +
+      `  Short: ${totalHubNeeded - hubNativeBalance} wei\n` +
+      `  Send ETH to ${userAddress} on chainId ${route.hubChainId} before redeeming.`,
+    );
+  }
+
+  return {
+    sharesOnSpoke,
+    spokeNativeBalance,
+    hubNativeBalance,
+    estimatedAssetBridgeFee,
+    estimatedAssetsOut: 0n,
+    hubLiquidBalance: 0n,
+  };
 }

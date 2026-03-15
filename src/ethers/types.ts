@@ -70,4 +70,99 @@ export interface CrossChainRequestInfo {
   amountLimit: bigint;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Curator Operations Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SwapParams {
+  targetContract: string;
+  tokenIn: string;
+  tokenOut: string;
+  maxAmountIn: bigint;
+  minAmountOut: bigint;
+  swapCallData: string;
+}
+
+export interface BatchSwapParams {
+  swaps: SwapParams[];
+}
+
+export interface BridgeParams {
+  oftToken: string;
+  dstEid: number;
+  amount: bigint;
+  dstVault: string;
+  refundAddress: string;
+}
+
+export interface PendingAction {
+  nonce: bigint;
+  actionsData: string[];
+  pendingUntil: bigint;
+  isExecutable: boolean;
+}
+
+export interface SubmitActionsResult {
+  receipt: ContractTransactionReceipt;
+  nonce: bigint;
+}
+
+export type CuratorAction =
+  | { type: 'swap'; params: SwapParams }
+  | { type: 'batchSwap'; params: BatchSwapParams }
+  | { type: 'erc4626Deposit'; vault: string; assets: bigint }
+  | { type: 'erc4626Redeem'; vault: string; shares: bigint }
+  | { type: 'erc7540RequestDeposit'; vault: string; assets: bigint }
+  | { type: 'erc7540Deposit'; vault: string; assets: bigint }
+  | { type: 'erc7540RequestRedeem'; vault: string; shares: bigint }
+  | { type: 'erc7540Redeem'; vault: string; shares: bigint };
+
+export interface CuratorVaultStatus {
+  curator: string;
+  timeLockPeriod: bigint;
+  maxSlippagePercent: bigint;
+  currentNonce: bigint;
+  availableAssets: string[];
+  lzAdapter: string;
+  paused: boolean;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vault Analysis Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface AssetInfo {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+}
+
+export interface VaultAnalysis {
+  /** All tokens the vault can hold/swap (curator-managed) */
+  availableAssets: AssetInfo[];
+  /** Tokens users can deposit */
+  depositableAssets: AssetInfo[];
+  /** Whether deposit whitelist is enabled (restricts who can deposit) */
+  depositWhitelistEnabled: boolean;
+  /** Registry address for global protocol whitelist checks */
+  registryAddress: string | null;
+}
+
+export interface AssetBalance extends AssetInfo {
+  /** Raw balance held by the vault */
+  balance: bigint;
+}
+
+export interface VaultAssetBreakdown {
+  /** Per-asset balances held by the vault on the hub chain */
+  assets: AssetBalance[];
+  /** totalAssets() as reported by the vault (all positions converted to underlying) */
+  totalAssets: bigint;
+  /** totalSupply() of vault shares */
+  totalSupply: bigint;
+  /** Vault underlying token decimals */
+  underlyingDecimals: number;
+}
+
 export type { Signer, Provider, ContractTransactionReceipt };

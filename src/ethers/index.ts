@@ -15,6 +15,18 @@ export type {
   Signer,
   Provider,
   ContractTransactionReceipt,
+  // Curator types
+  SwapParams,
+  BatchSwapParams,
+  BridgeParams,
+  PendingAction,
+  SubmitActionsResult,
+  CuratorAction,
+  CuratorVaultStatus,
+  AssetInfo,
+  VaultAnalysis,
+  AssetBalance,
+  VaultAssetBreakdown,
 } from "./types";
 export { ActionType } from "./types";
 
@@ -27,6 +39,16 @@ export {
   OFT_ABI,
   METADATA_ABI,
   LZ_ENDPOINT_ABI,
+  // Curator ABIs
+  MULTICALL_ABI,
+  DEX_ABI,
+  BRIDGE_FACET_ABI,
+  ERC7540_FACET_ABI,
+  ERC4626_FACET_ABI,
+  CURATOR_CONFIG_ABI,
+  LZ_ADAPTER_ABI,
+  VAULT_ANALYSIS_ABI,
+  REGISTRY_ABI,
 } from "./abis";
 
 // --- Errors ---
@@ -60,6 +82,7 @@ export {
   quoteDepositFromSpokeFee,
   quoteComposeFee,
   executeCompose,
+  waitForCompose,
 } from "./crossChainFlows";
 
 // --- Redeem flows ---
@@ -72,7 +95,10 @@ export {
   smartRedeem,
   bridgeSharesToHub,
   bridgeAssetsToSpoke,
+  resolveRedeemAddresses,
+  quoteShareBridgeFee,
 } from "./redeemFlows";
+export type { SpokeRedeemRoute } from "./redeemFlows";
 
 // --- Utilities ---
 export {
@@ -81,11 +107,18 @@ export {
   isAsyncMode,
   getAsyncRequestStatus,
   getVaultStatus,
+  detectStargateOft,
 } from "./utils";
 export type { VaultStatus, VaultMode } from "./utils";
 
 // --- Pre-flight validation ---
-export { preflightSync, preflightAsync, preflightRedeemLiquidity } from "./preflight";
+export {
+  preflightSync,
+  preflightAsync,
+  preflightRedeemLiquidity,
+  preflightSpokeDeposit,
+  preflightSpokeRedeem,
+} from "./preflight";
 
 // --- User Helpers ---
 export {
@@ -98,6 +131,7 @@ export {
   getUserBalances,
   getMaxWithdrawable,
   getVaultSummary,
+  getUserPositionMultiChain,
 } from "./userHelpers";
 export type {
   UserPosition,
@@ -109,7 +143,68 @@ export type {
   UserBalances,
   MaxWithdrawable,
   VaultSummary,
+  MultiChainUserPosition,
 } from "./userHelpers";
+
+// --- Curator status reads ---
+export {
+  getCuratorVaultStatus,
+  getPendingActions,
+  isCurator,
+  getVaultAnalysis,
+  checkProtocolWhitelist,
+  getVaultAssetBreakdown,
+} from "./curatorStatus";
+
+// --- Curator multicall writes ---
+export {
+  encodeCuratorAction,
+  buildCuratorBatch,
+  submitActions,
+  executeActions,
+  vetoActions,
+} from "./curatorMulticall";
+
+// --- Curator swap helpers ---
+export {
+  buildUniswapV3Swap,
+  encodeUniswapV3SwapCalldata,
+} from "./curatorSwaps";
+
+// --- Topology ---
+export {
+  getVaultTopology,
+  getFullVaultTopology,
+  discoverVaultTopology,
+  isOnHubChain,
+  getAllVaultChainIds,
+  OMNI_FACTORY_ADDRESS,
+} from "./topology";
+export type { VaultTopology } from "./topology";
+
+// --- Distribution ---
+export {
+  getVaultDistribution,
+  getVaultDistributionWithTopology,
+} from "./distribution";
+export type { VaultDistribution, SpokeBalance } from "./distribution";
+
+// --- Spoke routes ---
+export {
+  getInboundRoutes,
+  getUserBalancesForRoutes,
+  getOutboundRoutes,
+  quoteRouteDepositFee,
+  NATIVE_SYMBOL,
+} from "./spokeRoutes";
+export type {
+  InboundRoute,
+  InboundRouteWithBalance,
+  OutboundRoute,
+} from "./spokeRoutes";
+
+// --- Chains ---
+export { UNISWAP_V3_ROUTERS, OFT_ROUTES } from "./chains";
 
 // --- wagmi / ethers adapter compatibility ---
 export { asSdkSigner } from "./wagmiCompat";

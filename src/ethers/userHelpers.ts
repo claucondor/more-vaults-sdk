@@ -10,6 +10,8 @@ import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from "./ab
 import type { CrossChainRequestInfo } from "./types";
 import { getVaultStatus } from "./utils";
 import type { VaultStatus } from "./utils";
+import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
+import { discoverVaultTopology, OMNI_FACTORY_ADDRESS } from "./topology";
 
 // Multicall3 — deployed at the same address on every EVM chain
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -477,4 +479,195 @@ export async function getVaultSummary(
     getVaultMetadata(provider, vault),
   ]);
   return { ...status, ...metadata };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Minimal ABIs for SHARE_OFT discovery in getUserPositionMultiChain */
+const FACTORY_COMPOSER_ABI_UH = [
+  "function vaultComposer(address _vault) view returns (address)",
+] as const;
+
+const COMPOSER_SHARE_OFT_ABI_UH = [
+  "function SHARE_OFT() view returns (address)",
+] as const;
+
+const OFT_PEERS_ABI_UH = [
+  "function peers(uint32 eid) view returns (bytes32)",
+] as const;
+
+export interface MultiChainUserPosition {
+  /** Shares held directly on the hub vault (vault.balanceOf) */
+  hubShares: bigint;
+  /** Per-spoke SHARE_OFT balances normalized to vault decimals: { [chainId]: bigint } */
+  spokeShares: Record<number, bigint>;
+  /** Per-spoke SHARE_OFT raw balances in OFT native decimals: { [chainId]: bigint }
+   *  Use these for bridgeSharesToHub() and quoteShareBridgeFee() */
+  rawSpokeShares: Record<number, bigint>;
+  /** hubShares + sum of all spokeShares (in vault decimals) */
+  totalShares: bigint;
+  /** convertToAssets(totalShares) on the hub */
+  estimatedAssets: bigint;
+  /** Share price: convertToAssets(10^decimals) */
+  sharePrice: bigint;
+  /** Vault decimals */
+  decimals: number;
+  /** Pending async withdrawal request on hub, or null */
+  pendingWithdrawal: {
+    shares: bigint;
+    timelockEndsAt: bigint;
+    canRedeemNow: boolean;
+  } | null;
+}
+
+/**
+ * Read the user's position across all chains of an omni vault.
+ *
+ * Discovers topology automatically, reads hub shares + pending withdrawal,
+ * then reads SHARE_OFT balances on each spoke chain in parallel.
+ *
+ * For local (single-chain) vaults, spokeShares will be empty and this
+ * behaves identically to getUserPosition.
+ *
+ * @param vault  Vault address (same on all chains via CREATE3)
+ * @param user   User wallet address
+ * @returns      Aggregated position across all chains
+ */
+export async function getUserPositionMultiChain(
+  vault: string,
+  user: string,
+): Promise<MultiChainUserPosition> {
+  // Step 1: discover topology
+  const topo = await discoverVaultTopology(vault);
+  const hubProvider = createChainProvider(topo.hubChainId);
+  if (!hubProvider) throw new Error(`No public RPC for hub chainId ${topo.hubChainId}`);
+
+  // Step 2: read hub data (shares, decimals, withdrawal request)
+  const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, hubProvider);
+  const vaultIface = new Interface(VAULT_ABI as unknown as string[]);
+  const decimalsIface = new Interface(["function decimals() view returns (uint8)"]);
+
+  const b1Calls = [
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("balanceOf", [user]) },
+    { target: vault, allowFailure: false, callData: decimalsIface.encodeFunctionData("decimals") },
+    { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("getWithdrawalRequest", [user]) },
+  ];
+
+  const [b1Raw, block] = await Promise.all([
+    mc.aggregate3.staticCall(b1Calls) as Promise<{ success: boolean; returnData: string }[]>,
+    hubProvider.getBlock("latest"),
+  ]);
+
+  const hubShares = vaultIface.decodeFunctionResult("balanceOf", b1Raw[0].returnData)[0] as bigint;
+  const decimals = Number(decimalsIface.decodeFunctionResult("decimals", b1Raw[1].returnData)[0]);
+  const withdrawalResult = vaultIface.decodeFunctionResult("getWithdrawalRequest", b1Raw[2].returnData);
+  const withdrawShares = withdrawalResult[0] as bigint;
+  const timelockEndsAt = withdrawalResult[1] as bigint;
+
+  // Step 3: resolve SHARE_OFT addresses for spokes (if any)
+  const spokeShares: Record<number, bigint> = {};
+  const rawSpokeShares: Record<number, bigint> = {};
+
+  if (topo.spokeChainIds.length > 0) {
+    let hubShareOft: string | null = null;
+    try {
+      const factory = new Contract(OMNI_FACTORY_ADDRESS, FACTORY_COMPOSER_ABI_UH, hubProvider);
+      const composerAddress: string = await factory.vaultComposer(vault);
+
+      if (composerAddress !== "0x0000000000000000000000000000000000000000") {
+        const composer = new Contract(composerAddress, COMPOSER_SHARE_OFT_ABI_UH, hubProvider);
+        hubShareOft = await composer.SHARE_OFT();
+      }
+    } catch { /* no composer — skip spoke reads */ }
+
+    if (hubShareOft) {
+      const hubShareOftContract = new Contract(hubShareOft, OFT_PEERS_ABI_UH, hubProvider);
+
+      const spokePromises = topo.spokeChainIds.map(async (spokeChainId) => {
+        try {
+          const spokeEid = CHAIN_ID_TO_EID[spokeChainId];
+          if (!spokeEid) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n };
+
+          const spokeOftBytes32: string = await hubShareOftContract.peers(spokeEid);
+          const spokeOft = `0x${spokeOftBytes32.slice(-40)}`;
+
+          if (spokeOft === "0x0000000000000000000000000000000000000000") {
+            return { chainId: spokeChainId, balance: 0n, rawBalance: 0n };
+          }
+
+          const spokeProvider = createChainProvider(spokeChainId);
+          if (!spokeProvider) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n };
+
+          // Read balance + decimals on spoke chain via Multicall3
+          const spokeMc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, spokeProvider);
+          const erc20Iface = new Interface(ERC20_ABI as unknown as string[]);
+          const spokeDecimalsIface = new Interface(["function decimals() view returns (uint8)"]);
+
+          const spokeCalls = [
+            { target: spokeOft, allowFailure: false, callData: erc20Iface.encodeFunctionData("balanceOf", [user]) },
+            { target: spokeOft, allowFailure: false, callData: spokeDecimalsIface.encodeFunctionData("decimals") },
+          ];
+          const spokeRaw: { success: boolean; returnData: string }[] =
+            await spokeMc.aggregate3.staticCall(spokeCalls);
+
+          const rawBalance = erc20Iface.decodeFunctionResult("balanceOf", spokeRaw[0].returnData)[0] as bigint;
+          const spokeOftDecimals = Number(spokeDecimalsIface.decodeFunctionResult("decimals", spokeRaw[1].returnData)[0]);
+
+          // Normalize to vault decimals
+          let balance: bigint;
+          if (spokeOftDecimals > decimals) {
+            balance = rawBalance / (10n ** BigInt(spokeOftDecimals - decimals));
+          } else if (spokeOftDecimals < decimals) {
+            balance = rawBalance * (10n ** BigInt(decimals - spokeOftDecimals));
+          } else {
+            balance = rawBalance;
+          }
+
+          return { chainId: spokeChainId, balance, rawBalance };
+        } catch {
+          return { chainId: spokeChainId, balance: 0n, rawBalance: 0n };
+        }
+      });
+
+      const results = await Promise.all(spokePromises);
+      for (const { chainId, balance, rawBalance } of results) {
+        spokeShares[chainId] = balance;
+        rawSpokeShares[chainId] = rawBalance;
+      }
+    }
+  }
+
+  // Step 4: compute totals
+  const totalSpokeShares = Object.values(spokeShares).reduce((sum, b) => sum + b, 0n);
+  const totalShares = hubShares + totalSpokeShares;
+
+  const oneShare = 10n ** BigInt(decimals);
+  const vaultContract = new Contract(vault, VAULT_ABI, hubProvider);
+  const [estimatedAssets, sharePrice]: [bigint, bigint] = await Promise.all([
+    totalShares === 0n
+      ? Promise.resolve(0n)
+      : (vaultContract.convertToAssets(totalShares) as Promise<bigint>),
+    vaultContract.convertToAssets(oneShare) as Promise<bigint>,
+  ]);
+
+  // Step 5: pending withdrawal
+  const currentTimestamp = BigInt(block?.timestamp ?? 0);
+  const pendingWithdrawal = withdrawShares === 0n
+    ? null
+    : {
+        shares: withdrawShares,
+        timelockEndsAt,
+        canRedeemNow: timelockEndsAt === 0n || currentTimestamp >= timelockEndsAt,
+      };
+
+  return {
+    hubShares,
+    spokeShares,
+    rawSpokeShares,
+    totalShares,
+    estimatedAssets,
+    sharePrice,
+    decimals,
+    pendingWithdrawal,
+  };
 }

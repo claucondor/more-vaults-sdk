@@ -15,7 +15,9 @@ import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
 import { EscrowNotConfiguredError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
-import { getVaultStatus, quoteLzFee } from "./utils";
+import { getVaultStatus, quoteLzFee, detectStargateOft } from "./utils";
+import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
+import { OMNI_FACTORY_ADDRESS } from "./topology";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -406,4 +408,161 @@ export async function bridgeAssetsToSpoke(
   const receipt = await tx.wait();
 
   return { receipt };
+}
+
+// ---------------------------------------------------------------------------
+// Spoke redeem helpers
+// ---------------------------------------------------------------------------
+
+/** Minimal ABIs used only within redeemFlows */
+const FACTORY_COMPOSER_ABI_RF = [
+  "function vaultComposer(address _vault) view returns (address)",
+] as const;
+
+const REDEEM_COMPOSER_ABI = [
+  "function SHARE_OFT() view returns (address)",
+] as const;
+
+const OFT_PEERS_ABI_RF = [
+  "function peers(uint32 eid) view returns (bytes32)",
+] as const;
+
+export interface SpokeRedeemRoute {
+  /** Hub chain ID */
+  hubChainId: number
+  /** Spoke chain ID */
+  spokeChainId: number
+  /** LZ EID for the hub */
+  hubEid: number
+  /** LZ EID for the spoke */
+  spokeEid: number
+  /** Vault underlying asset address on hub */
+  hubAsset: string
+  /** SHARE_OFT on spoke chain */
+  spokeShareOft: string
+  /** Asset OFT on hub for bridging back */
+  hubAssetOft: string
+  /** Underlying asset address on spoke chain */
+  spokeAsset: string
+  /** Whether the asset OFT is a Stargate pool */
+  isStargate: boolean
+  /** OFT route symbol (e.g. 'stgUSDC') */
+  symbol: string
+}
+
+/**
+ * Quote the LZ fee for bridging shares from spoke to hub via SHARE_OFT.
+ *
+ * IMPORTANT: `amountLD` must be in SHARE_OFT native decimals (e.g. 18),
+ * NOT vault decimals (e.g. 8). Use the raw `SHARE_OFT.balanceOf(user)` value.
+ *
+ * @param spokeProvider  Read-only provider on the SPOKE chain
+ * @param shareOFT       SHARE_OFT address on the spoke chain
+ * @param hubChainEid    LayerZero Endpoint ID for the hub chain
+ * @param amountLD       Shares in SHARE_OFT native decimals (raw balanceOf)
+ * @param receiver       Receiver address on the hub chain
+ * @returns              LZ native fee in wei
+ */
+export async function quoteShareBridgeFee(
+  spokeProvider: Provider,
+  shareOFT: string,
+  hubChainEid: number,
+  amountLD: bigint,
+  receiver: string,
+): Promise<bigint> {
+  const toBytes32 = zeroPadValue(receiver, 32);
+  const sendParam = {
+    dstEid: hubChainEid,
+    to: toBytes32,
+    amountLD,
+    minAmountLD: amountLD,
+    extraOptions: "0x",
+    composeMsg: "0x",
+    oftCmd: "0x",
+  };
+
+  const oft = new Contract(shareOFT, OFT_ABI, spokeProvider);
+  const fee = await oft.quoteSend(sendParam, false);
+  return fee.nativeFee as bigint;
+}
+
+/**
+ * Resolve all addresses needed for a full spoke→hub→spoke redeem flow.
+ *
+ * @param hubProvider  Read-only provider on the HUB chain
+ * @param vault        Vault address
+ * @param hubChainId   Hub chain ID
+ * @param spokeChainId Spoke chain ID where user has shares
+ * @returns            All addresses needed for bridgeSharesToHub + redeemShares + bridgeAssetsToSpoke
+ */
+export async function resolveRedeemAddresses(
+  hubProvider: Provider,
+  vault: string,
+  hubChainId: number,
+  spokeChainId: number,
+): Promise<SpokeRedeemRoute> {
+  const hubEid = CHAIN_ID_TO_EID[hubChainId];
+  const spokeEid = CHAIN_ID_TO_EID[spokeChainId];
+  if (!hubEid || !spokeEid) {
+    throw new Error(`No LZ EID for chainId ${!hubEid ? hubChainId : spokeChainId}`);
+  }
+
+  const vaultContract = new Contract(vault, VAULT_ABI, hubProvider);
+  const factory = new Contract(OMNI_FACTORY_ADDRESS, FACTORY_COMPOSER_ABI_RF, hubProvider);
+  const [hubAsset, composerAddress]: [string, string] = await Promise.all([
+    vaultContract.asset(),
+    factory.vaultComposer(vault),
+  ]);
+
+  if (composerAddress === ZeroAddress) {
+    throw new Error(`[MoreVaults] No composer registered for vault ${vault} on hub chain ${hubChainId}`);
+  }
+
+  const composer = new Contract(composerAddress, REDEEM_COMPOSER_ABI, hubProvider);
+  const hubShareOft: string = await composer.SHARE_OFT();
+
+  const hubShareOftContract = new Contract(hubShareOft, OFT_PEERS_ABI_RF, hubProvider);
+  const spokeShareOftBytes32: string = await hubShareOftContract.peers(spokeEid);
+
+  // Convert bytes32 to address (last 20 bytes = last 40 hex chars)
+  const spokeShareOft = `0x${spokeShareOftBytes32.slice(-40)}`;
+
+  let hubAssetOft: string | null = null;
+  let spokeAsset: string | null = null;
+  let symbol = '';
+
+  for (const [sym, chainMap] of Object.entries(OFT_ROUTES)) {
+    const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId];
+    const spokeEntry = (chainMap as Record<number, { oft: string; token: string }>)[spokeChainId];
+    if (!hubEntry || !spokeEntry) continue;
+
+    if (hubEntry.token.toLowerCase() === hubAsset.toLowerCase()) {
+      hubAssetOft = hubEntry.oft;
+      spokeAsset = spokeEntry.token;
+      symbol = sym;
+      break;
+    }
+  }
+
+  if (!hubAssetOft || !spokeAsset) {
+    throw new Error(
+      `[MoreVaults] No OFT route found for vault asset ${hubAsset} ` +
+      `between hub chain ${hubChainId} and spoke chain ${spokeChainId}`,
+    );
+  }
+
+  const isStargate = await detectStargateOft(hubProvider, hubAssetOft);
+
+  return {
+    hubChainId,
+    spokeChainId,
+    hubEid,
+    spokeEid,
+    hubAsset,
+    spokeShareOft,
+    hubAssetOft,
+    spokeAsset,
+    isStargate,
+    symbol,
+  };
 }

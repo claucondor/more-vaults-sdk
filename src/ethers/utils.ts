@@ -8,6 +8,11 @@ import { Contract, Interface, ZeroAddress } from "ethers";
 import type { Provider, Signer } from "ethers";
 import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI } from "./abis";
 
+// Minimal ABI for Stargate type detection
+const STARGATE_TYPE_ABI = [
+  "function stargateType() view returns (uint8)",
+] as const;
+
 // Multicall3 — deployed at the same address on every EVM chain
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
 const MULTICALL3_ABI = [
@@ -378,4 +383,27 @@ export async function getVaultStatus(
     maxImmediateRedeemAssets,
     issues,
   };
+}
+
+/**
+ * Detect whether an OFT address is a Stargate V2 pool by calling `stargateType()`.
+ *
+ * Stargate pools implement this function (returns 0=Pool, 1=OFT).
+ * Standard OFTs revert because they don't have it.
+ *
+ * @param provider  Read-only provider on the OFT's chain
+ * @param oft       OFT contract address
+ * @returns         true if the contract is a Stargate V2 pool/OFT
+ */
+export async function detectStargateOft(
+  provider: Provider,
+  oft: string
+): Promise<boolean> {
+  try {
+    const contract = new Contract(oft, STARGATE_TYPE_ABI, provider);
+    await contract.stargateType();
+    return true;
+  } catch {
+    return false;
+  }
 }

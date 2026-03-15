@@ -1,6 +1,9 @@
 import { Contract, AbiCoder, zeroPadValue, Signer, Provider } from "ethers";
 import { ERC20_ABI, OFT_ABI, BRIDGE_ABI, LZ_ENDPOINT_ABI } from "./abis";
 import type { ContractTransactionReceipt } from "ethers";
+import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider } from "./chains";
+import { detectStargateOft } from "./utils";
+import { OMNI_FACTORY_ADDRESS } from "./topology";
 
 /** LZ Endpoint V2 address — same on all EVM chains */
 const LZ_ENDPOINT = "0x1a44076050125825900e736c501f859c50fe728c";
@@ -308,4 +311,209 @@ export async function executeCompose(
   const receipt = await tx.wait();
 
   return { receipt };
+}
+
+// ---------------------------------------------------------------------------
+// Compose data types and waitForCompose
+// ---------------------------------------------------------------------------
+
+/**
+ * Data needed to execute a pending LZ compose on the hub chain.
+ * Returned by `depositFromSpoke` when the OFT is a Stargate V2 pool.
+ * The SDK user must call `executeCompose()` with this data as TX2 on the hub.
+ */
+export interface ComposeData {
+  /** LZ Endpoint address on the hub chain */
+  endpoint: string
+  /** The OFT/pool address that sent the compose (Stargate pool on hub) — resolved by waitForCompose */
+  from: string
+  /** MoreVaultsComposer address on the hub */
+  to: string
+  /** LayerZero GUID from the original OFT.send() */
+  guid: string
+  /** Compose index (default 0) */
+  index: number
+  /** Full compose message bytes — resolved by waitForCompose from ComposeSent event */
+  message: string
+  /** Whether this is a Stargate OFT (2-TX flow) */
+  isStargate: boolean
+  /** Hub chain ID */
+  hubChainId: number
+  /** Block number on hub chain right before depositFromSpoke TX — used to bound event scan */
+  hubBlockStart: bigint
+}
+
+/** Minimal ABIs for helper functions used only in this file */
+const FACTORY_COMPOSER_ABI_MIN = [
+  "function vaultComposer(address _vault) view returns (address)",
+] as const;
+
+const COMPOSER_SHARE_OFT_ABI = [
+  "function SHARE_OFT() view returns (address)",
+] as const;
+
+const OFT_PEERS_ABI = [
+  "function peers(uint32 eid) view returns (bytes32)",
+] as const;
+
+const OFT_TOKEN_ABI = [
+  "function token() view returns (address)",
+] as const;
+
+const OFT_QUOTE_OFT_ABI = [
+  "function quoteOFT(tuple(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd) sendParam) view returns (tuple(uint256 minAmountLD, uint256 maxAmountLD), tuple(int256 feeAmountLD, string description)[], tuple(uint256 amountSentLD, uint256 amountReceivedLD))",
+] as const;
+
+/**
+ * Wait for a pending compose to appear in the LZ Endpoint's composeQueue on the hub chain.
+ *
+ * After `depositFromSpoke` sends tokens via Stargate, the LZ network delivers the message
+ * to the hub chain. The endpoint stores the compose hash in `composeQueue` and emits
+ * a `ComposeSent` event with the full message bytes.
+ *
+ * Strategy: scan ComposeSent events on the LZ Endpoint starting from `hubBlockStart`
+ * (captured by `depositFromSpoke` right before TX1). We scan forward in 500-block chunks,
+ * matching by composer address and receiver in the message body.
+ *
+ * @param hubProvider      Read-only provider on the HUB chain
+ * @param composeData      Partial compose data (includes hubBlockStart, to, guid)
+ * @param receiver         Receiver address to match in the compose message
+ * @param pollIntervalMs   Polling interval (default 20s)
+ * @param timeoutMs        Timeout (default 30 min)
+ * @returns                Complete ComposeData ready for executeCompose
+ */
+export async function waitForCompose(
+  hubProvider: Provider,
+  composeData: ComposeData,
+  receiver: string,
+  pollIntervalMs = 20_000,
+  timeoutMs = 1_800_000,
+): Promise<ComposeData> {
+  const deadline = Date.now() + timeoutMs
+  const composer = composeData.to.toLowerCase()
+  const endpoint = composeData.endpoint
+  const receiverNeedle = receiver.replace(/^0x/, '').toLowerCase()
+  const startBlock = composeData.hubBlockStart
+
+  // Collect Stargate OFT addresses on the hub chain
+  const hubChainId = composeData.hubChainId
+  const candidateAddresses: string[] = []
+  for (const chainMap of Object.values(OFT_ROUTES)) {
+    const entry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
+    if (entry) candidateAddresses.push(entry.oft.toLowerCase())
+  }
+
+  // Filter to Stargate addresses on-chain
+  const stargateChecks = await Promise.all(
+    candidateAddresses.map(async (addr) => ({
+      addr,
+      isSg: await detectStargateOft(hubProvider, addr),
+    })),
+  )
+  const knownFromAddresses = stargateChecks.filter((c) => c.isSg).map((c) => c.addr)
+
+  // ComposeSent event ABI for getLogs
+  const endpointContract = new Contract(endpoint, LZ_ENDPOINT_ABI, hubProvider)
+
+  // ComposeSent event topic
+  const COMPOSE_SENT_TOPIC = "0x0c68e6a0b0fb0f33c52455a8da89b21fc640a3dd4a1b21d9bfcc8aeee4a43e84"
+
+  let attempt = 0
+  let scannedUpTo = startBlock - 1n
+
+  while (Date.now() < deadline) {
+    attempt++
+    const elapsed = Math.round((Date.now() - (deadline - timeoutMs)) / 1000)
+
+    try {
+      const currentBlock = BigInt(await hubProvider.getBlockNumber())
+      const chunkSize = 500n
+      let from = scannedUpTo + 1n
+
+      while (from <= currentBlock) {
+        const chunkEnd = from + chunkSize > currentBlock ? currentBlock : from + chunkSize
+
+        try {
+          const logs = await hubProvider.getLogs({
+            address: endpoint,
+            topics: [COMPOSE_SENT_TOPIC],
+            fromBlock: `0x${from.toString(16)}`,
+            toBlock: `0x${chunkEnd.toString(16)}`,
+          })
+
+          for (const log of logs) {
+            // ComposeSent(address from, address to, bytes32 guid, uint16 index, bytes message)
+            // All params are non-indexed — decode from data
+            try {
+              const coder = AbiCoder.defaultAbiCoder()
+              const decoded = coder.decode(
+                ['address', 'address', 'bytes32', 'uint16', 'bytes'],
+                log.data,
+              )
+              const logFrom = (decoded[0] as string).toLowerCase()
+              const logTo = (decoded[1] as string).toLowerCase()
+              const logGuid = decoded[2] as string
+              const logIndex = Number(decoded[3])
+              const logMessage = decoded[4] as string
+
+              if (
+                logTo === composer &&
+                logMessage.toLowerCase().includes(receiverNeedle)
+              ) {
+                // Verify this compose is still pending in composeQueue
+                const hash: string = await endpointContract.composeQueue(
+                  logFrom, composer, logGuid, logIndex,
+                )
+
+                if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+                  console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber})`)
+                  return {
+                    ...composeData,
+                    from: decoded[0] as string,
+                    to: composeData.to,
+                    guid: logGuid,
+                    index: logIndex,
+                    message: logMessage,
+                  }
+                }
+              }
+            } catch { /* decode failed — skip log */ }
+          }
+        } catch {
+          // Chunk failed (RPC limit) — break inner loop, will retry next poll
+          break
+        }
+
+        from = chunkEnd + 1n
+      }
+
+      scannedUpTo = currentBlock
+    } catch {
+      // getBlockNumber failed — retry next poll
+    }
+
+    // Also try composeQueue directly with spoke GUID (works when GUIDs match)
+    let guidMatchFound = false
+    for (const fromAddr of knownFromAddresses) {
+      try {
+        const hash: string = await endpointContract.composeQueue(
+          fromAddr, composer, composeData.guid, 0,
+        )
+        if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+          console.log(`[${elapsed}s] Poll #${attempt} — composeQueue confirms pending (GUID match), re-scanning for message...`)
+          scannedUpTo = startBlock - 1n
+          guidMatchFound = true
+        }
+      } catch { /* continue */ }
+    }
+
+    if (!guidMatchFound) {
+      console.log(`[${elapsed}s] Poll #${attempt} — compose not found yet, waiting ${pollIntervalMs / 1000}s...`)
+    }
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+  }
+
+  throw new Error(
+    `Timeout waiting for compose after ${timeoutMs / 60_000} min. Check LayerZero scan for composer ${composeData.to}.`,
+  )
 }
