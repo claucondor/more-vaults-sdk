@@ -2,7 +2,7 @@
 // Provides typed helpers for all deposit, redeem, and cross-chain vault flows.
 
 // --- Chain constants ---
-export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, OFT_ROUTES, STARGATE_TAXI_CMD, USDC_STARGATE_OFT, USDC_TOKEN, LZ_TIMEOUTS } from './chains'
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, OFT_ROUTES, STARGATE_TAXI_CMD, USDC_STARGATE_OFT, USDC_TOKEN, LZ_TIMEOUTS, UNISWAP_V3_ROUTERS } from './chains'
 
 // --- ABIs ---
 export {
@@ -42,7 +42,9 @@ export type {
   CuratorAction,
   CuratorVaultStatus,
   AssetInfo,
+  AssetBalance,
   VaultAnalysis,
+  VaultAssetBreakdown,
 } from './types'
 export { ActionType } from './types'
 
@@ -162,6 +164,7 @@ export {
   isCurator,
   getVaultAnalysis,
   checkProtocolWhitelist,
+  getVaultAssetBreakdown,
 } from './curatorStatus'
 export {
   encodeCuratorAction,
@@ -170,6 +173,10 @@ export {
   executeActions,
   vetoActions,
 } from './curatorMulticall'
+export {
+  buildUniswapV3Swap,
+  encodeUniswapV3SwapCalldata,
+} from './curatorSwaps'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.

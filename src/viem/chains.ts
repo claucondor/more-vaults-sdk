@@ -261,6 +261,23 @@ export const LZ_TIMEOUTS = {
   FULL_SPOKE_REDEEM: 3_600_000, // 60 min
 } as const
 
+/**
+ * Uniswap V3 SwapRouter addresses per chain.
+ * Used by curator swap helpers to build calldata for on-chain swaps.
+ *
+ * Note on struct differences:
+ *   - SwapRouter (Eth/Arb/Op, 0xE592...): exactInputSingle struct includes `deadline`
+ *   - SwapRouter02 (Base, 0x2626...): exactInputSingle struct does NOT include `deadline`
+ *   - FlowSwap V3 (Flow EVM, 0xeEDC...): derived from original UniV3, includes `deadline`
+ */
+export const UNISWAP_V3_ROUTERS: Record<number, `0x${string}`> = {
+  [8453]:  '0x2626664c2603336E57B271c5C0b26F421741e481', // Base — SwapRouter02 (no deadline)
+  [1]:     '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Ethereum — SwapRouter
+  [42161]: '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Arbitrum — SwapRouter
+  [10]:    '0xE592427A0AEce92De3Edee1F18E0157C05861564', // Optimism — SwapRouter
+  [747]:   '0xeEDC6Ff75e1b10B903D9013c358e446a73d35341',  // Flow EVM — FlowSwap V3 SwapRouter
+}
+
 // ---------------------------------------------------------------------------
 // Legacy flat exports — kept for backwards compat, prefer OFT_ROUTES
 // ---------------------------------------------------------------------------

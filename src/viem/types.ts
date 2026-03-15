@@ -177,3 +177,19 @@ export interface VaultAnalysis {
   /** Registry address for global protocol whitelist checks */
   registryAddress: Address | null
 }
+
+export interface AssetBalance extends AssetInfo {
+  /** Raw balance held by the vault */
+  balance: bigint
+}
+
+export interface VaultAssetBreakdown {
+  /** Per-asset balances held by the vault on the hub chain */
+  assets: AssetBalance[]
+  /** totalAssets() as reported by the vault (all positions converted to underlying) */
+  totalAssets: bigint
+  /** totalSupply() of vault shares */
+  totalSupply: bigint
+  /** Vault underlying token decimals */
+  underlyingDecimals: number
+}

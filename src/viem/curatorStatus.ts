@@ -6,8 +6,8 @@
  */
 
 import { type Address, type PublicClient, getAddress } from 'viem'
-import { MULTICALL_ABI, CURATOR_CONFIG_ABI, VAULT_ANALYSIS_ABI, REGISTRY_ABI, METADATA_ABI } from './abis.js'
-import type { CuratorVaultStatus, PendingAction, VaultAnalysis, AssetInfo } from './types.js'
+import { MULTICALL_ABI, CURATOR_CONFIG_ABI, VAULT_ANALYSIS_ABI, REGISTRY_ABI, METADATA_ABI, ERC20_ABI, VAULT_ABI } from './abis.js'
+import type { CuratorVaultStatus, PendingAction, VaultAnalysis, AssetInfo, AssetBalance, VaultAssetBreakdown } from './types.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -253,3 +253,67 @@ export async function checkProtocolWhitelist(
   return out
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get the vault's per-asset balance breakdown on the hub chain.
+ *
+ * Returns the balance of every available asset held by the vault, plus
+ * totalAssets and totalSupply for context. Useful for portfolio views
+ * that need to show individual holdings rather than a single USD-denominated total.
+ *
+ * @param publicClient  Viem public client (must be on the vault's hub chain)
+ * @param vault         Vault address (diamond proxy)
+ * @returns             VaultAssetBreakdown with per-asset balances
+ */
+export async function getVaultAssetBreakdown(
+  publicClient: PublicClient,
+  vault: Address,
+): Promise<VaultAssetBreakdown> {
+  const v = getAddress(vault)
+
+  // Step 1: get available assets list
+  const availableRaw = await publicClient.readContract({
+    address: v,
+    abi: VAULT_ANALYSIS_ABI,
+    functionName: 'getAvailableAssets',
+  }) as Address[]
+
+  const addresses = availableRaw.map(getAddress)
+
+  // Step 2: multicall — balanceOf + metadata for each asset + totalAssets + totalSupply + vault decimals
+  const results = await publicClient.multicall({
+    contracts: [
+      // Per-asset: balanceOf, name, symbol, decimals
+      ...addresses.flatMap((addr) => [
+        { address: addr, abi: ERC20_ABI, functionName: 'balanceOf' as const, args: [v] as [Address] },
+        { address: addr, abi: METADATA_ABI, functionName: 'name' as const },
+        { address: addr, abi: METADATA_ABI, functionName: 'symbol' as const },
+        { address: addr, abi: METADATA_ABI, functionName: 'decimals' as const },
+      ]),
+      // Vault totals
+      { address: v, abi: VAULT_ABI, functionName: 'totalAssets' as const },
+      { address: v, abi: VAULT_ABI, functionName: 'totalSupply' as const },
+      { address: v, abi: METADATA_ABI, functionName: 'decimals' as const },
+    ],
+    allowFailure: true,
+  })
+
+  const perAssetFields = 4 // balanceOf, name, symbol, decimals
+  const assets: AssetBalance[] = addresses.map((addr, i) => {
+    const base = i * perAssetFields
+    const balance  = results[base]?.status === 'success'     ? (results[base].result as bigint)   : 0n
+    const name     = results[base + 1]?.status === 'success' ? (results[base + 1].result as string) : ''
+    const symbol   = results[base + 2]?.status === 'success' ? (results[base + 2].result as string) : ''
+    const decimals = results[base + 3]?.status === 'success' ? (results[base + 3].result as number) : 18
+
+    return { address: addr, name, symbol, decimals, balance }
+  })
+
+  const totalsBase = addresses.length * perAssetFields
+  const totalAssets      = results[totalsBase]?.status === 'success'     ? (results[totalsBase].result as bigint)   : 0n
+  const totalSupply      = results[totalsBase + 1]?.status === 'success' ? (results[totalsBase + 1].result as bigint) : 0n
+  const underlyingDecimals = results[totalsBase + 2]?.status === 'success' ? (results[totalsBase + 2].result as number) : 6
+
+  return { assets, totalAssets, totalSupply, underlyingDecimals }
+}
