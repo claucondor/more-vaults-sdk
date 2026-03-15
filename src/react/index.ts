@@ -37,3 +37,28 @@ export { useSmartRedeem } from './useSmartRedeem.js'
 
 // --- Inbound Routes ---
 export { useInboundRoutes, getRouteTokenDecimals } from './useInboundRoutes.js'
+
+// --- Curator Read hooks ---
+export { useCuratorVaultStatus } from './useCuratorVaultStatus.js'
+export type { CuratorVaultStatus } from './useCuratorVaultStatus.js'
+
+export { useVaultAnalysis } from './useVaultAnalysis.js'
+export type { VaultAnalysis } from './useVaultAnalysis.js'
+
+export { useVaultAssetBreakdown } from './useVaultAssetBreakdown.js'
+export type { VaultAssetBreakdown } from './useVaultAssetBreakdown.js'
+
+export { usePendingActions } from './usePendingActions.js'
+export type { PendingAction } from './usePendingActions.js'
+
+export { useIsCurator } from './useIsCurator.js'
+
+export { useProtocolWhitelist } from './useProtocolWhitelist.js'
+
+// --- Curator Write hooks ---
+export { useSubmitActions } from './useSubmitActions.js'
+export type { CuratorAction } from './useSubmitActions.js'
+
+export { useExecuteActions } from './useExecuteActions.js'
+
+export { useVetoActions } from './useVetoActions.js'
