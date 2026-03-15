@@ -522,3 +522,43 @@ export async function waitForAsyncRequest(
     `The request may still complete — check https://layerzeroscan.com/tx/${guid}`,
   )
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stargate detection — on-chain probe
+// ─────────────────────────────────────────────────────────────────────────────
+
+const STARGATE_TYPE_ABI = [
+  {
+    type: 'function' as const,
+    name: 'stargateType' as const,
+    inputs: [] as const,
+    outputs: [{ type: 'uint8' as const }] as const,
+    stateMutability: 'view' as const,
+  },
+] as const
+
+/**
+ * Detect whether an OFT address is a Stargate V2 pool by calling `stargateType()`.
+ *
+ * Stargate pools implement this function (returns 0=Pool, 1=OFT).
+ * Standard OFTs revert because they don't have it.
+ *
+ * @param publicClient  Viem public client on the OFT's chain
+ * @param oft           OFT contract address
+ * @returns             true if the contract is a Stargate V2 pool/OFT
+ */
+export async function detectStargateOft(
+  publicClient: PublicClient,
+  oft: Address,
+): Promise<boolean> {
+  try {
+    await publicClient.readContract({
+      address: getAddress(oft),
+      abi: STARGATE_TYPE_ABI,
+      functionName: 'stargateType',
+    })
+    return true
+  } catch {
+    return false
+  }
+}

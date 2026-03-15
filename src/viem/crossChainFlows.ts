@@ -10,7 +10,7 @@ import {
 } from 'viem'
 import { OFT_ABI, BRIDGE_ABI, LZ_ENDPOINT_ABI } from './abis'
 import type { ComposeData, SpokeDepositResult } from './types'
-import { ensureAllowance } from './utils'
+import { ensureAllowance, detectStargateOft } from './utils'
 import { OFT_ROUTES, EID_TO_CHAIN_ID } from './chains'
 import { OMNI_FACTORY_ADDRESS } from './topology'
 import { createChainClient } from './spokeRoutes'
@@ -38,8 +38,6 @@ const COMPOSER_ABI = [
   },
 ] as const
 
-const STARGATE_ASSETS = new Set(['stgUSDC', 'USDT', 'WETH'])
-
 /**
  * Build a LZ V2 TYPE_3 executor option that forwards native ETH to the lzCompose call.
  *
@@ -59,17 +57,6 @@ function buildLzComposeOption(gas: bigint, nativeValue: bigint): `0x${string}` {
   const gasHex = gas.toString(16).padStart(32, '0')
   const valueHex = nativeValue.toString(16).padStart(32, '0')
   return `0x00030300220000${gasHex}${valueHex}` as `0x${string}`
-}
-
-/** Returns true if the OFT is a Stargate V2 pool (bus/taxi architecture). */
-function isStargateOft(oft: Address): boolean {
-  for (const [symbol, chainMap] of Object.entries(OFT_ROUTES)) {
-    if (!STARGATE_ASSETS.has(symbol)) continue
-    for (const entry of Object.values(chainMap as Record<number, { oft: string; token: string }>)) {
-      if (getAddress(entry.oft) === oft) return true
-    }
-  }
-  return false
 }
 
 /**
@@ -263,7 +250,7 @@ export async function depositFromSpoke(
 
   // For Stargate OFTs: extraOptions must be '0x' (rejects LZCOMPOSE type-3 options).
   // For standard OFTs: inject LZCOMPOSE option with native ETH for readFee + share send.
-  const isStargate = isStargateOft(oft)
+  const isStargate = await detectStargateOft(publicClient, oft)
   let resolvedExtraOptions: `0x${string}`
   if (extraOptions !== '0x') {
     resolvedExtraOptions = extraOptions
@@ -377,7 +364,7 @@ export async function depositFromSpoke(
   // The compose message is NOT available yet — it's emitted as ComposeSent on the hub
   // after LZ delivers the message. The user must call waitForCompose() to get it,
   // then executeCompose() to execute it.
-  const stargate = isStargateOft(getAddress(spokeOFT))
+  const stargate = isStargate
   let composeData: ComposeData | undefined
   if (stargate) {
     // Snapshot current hub block BEFORE waiting — this is exactly where we start
@@ -454,7 +441,7 @@ export async function quoteDepositFromSpokeFee(
   const composerBytes32 = pad(composerAddress, { size: 32 })
 
   // Match depositFromSpoke: resolve extraOptions the same way
-  const isStargate = isStargateOft(oft)
+  const isStargate = await detectStargateOft(publicClient, oft)
   let resolvedExtraOptions: `0x${string}`
   if (extraOptions !== '0x') {
     resolvedExtraOptions = extraOptions
@@ -560,14 +547,17 @@ export async function waitForCompose(
   const receiverNeedle = getAddress(receiver).slice(2).toLowerCase()
   const startBlock = composeData.hubBlockStart
 
-  // Known Stargate pool addresses on hub for composeQueue checks
-  const knownFromAddresses: Address[] = []
+  // Collect all OFT addresses on the hub chain, then filter to Stargate pools on-chain
   const hubChainId = composeData.hubChainId
-  for (const [symbol, chainMap] of Object.entries(OFT_ROUTES)) {
-    if (!STARGATE_ASSETS.has(symbol)) continue
+  const candidateAddresses: Address[] = []
+  for (const chainMap of Object.values(OFT_ROUTES)) {
     const entry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
-    if (entry) knownFromAddresses.push(getAddress(entry.oft) as Address)
+    if (entry) candidateAddresses.push(getAddress(entry.oft) as Address)
   }
+  const stargateChecks = await Promise.all(
+    candidateAddresses.map(async (addr) => ({ addr, isSg: await detectStargateOft(hubPublicClient, addr) })),
+  )
+  const knownFromAddresses = stargateChecks.filter((c) => c.isSg).map((c) => c.addr)
 
   let attempt = 0
   // Track the highest block we've already scanned to avoid re-scanning

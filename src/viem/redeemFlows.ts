@@ -15,7 +15,7 @@ import type {
   AsyncRequestResult,
 } from './types'
 import { ActionType } from './types'
-import { ensureAllowance, getVaultStatus, quoteLzFee } from './utils'
+import { ensureAllowance, getVaultStatus, quoteLzFee, detectStargateOft } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
 import { EscrowNotConfiguredError } from './errors'
 import { validateWalletChain } from './chainValidation'
@@ -581,8 +581,6 @@ export interface SpokeRedeemRoute {
   symbol: string
 }
 
-const STARGATE_ASSETS = new Set(['stgUSDC', 'USDT', 'WETH'])
-
 const FACTORY_COMPOSER_ABI = [
   {
     type: 'function' as const,
@@ -664,7 +662,6 @@ export async function resolveRedeemAddresses(
   // Find matching OFT route for the vault's asset on the hub chain
   let hubAssetOft: Address | null = null
   let spokeAsset: Address | null = null
-  let isStargate = false
   let symbol = ''
 
   for (const [sym, chainMap] of Object.entries(OFT_ROUTES)) {
@@ -675,7 +672,6 @@ export async function resolveRedeemAddresses(
     if (getAddress(hubEntry.token) === getAddress(hubAsset)) {
       hubAssetOft = getAddress(hubEntry.oft) as Address
       spokeAsset = getAddress(spokeEntry.token) as Address
-      isStargate = STARGATE_ASSETS.has(sym)
       symbol = sym
       break
     }
@@ -687,6 +683,9 @@ export async function resolveRedeemAddresses(
       `between hub chain ${hubChainId} and spoke chain ${spokeChainId}`,
     )
   }
+
+  // On-chain detection: Stargate pools implement stargateType(), standard OFTs revert
+  const isStargate = await detectStargateOft(hubPublicClient, hubAssetOft)
 
   return {
     hubChainId,

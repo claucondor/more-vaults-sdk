@@ -11,7 +11,8 @@ import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI, OFT_ABI } from './abis'
 import { InsufficientLiquidityError } from './errors'
 import { quoteComposeFee } from './crossChainFlows'
 import { createChainClient } from './spokeRoutes'
-import { EID_TO_CHAIN_ID, OFT_ROUTES } from './chains'
+import { EID_TO_CHAIN_ID } from './chains'
+import { detectStargateOft } from './utils'
 
 /**
  * Pre-flight checks for async cross-chain flows (D4 / D5 / R5).
@@ -305,14 +306,7 @@ export async function preflightSpokeDeposit(
   }
 
   // 3. For Stargate OFTs: check ETH on hub for TX2 (compose retry)
-  const STARGATE_ASSETS = new Set(['stgUSDC', 'USDT', 'WETH'])
-  let isStargate = false
-  for (const [symbol, chainMap] of Object.entries(OFT_ROUTES)) {
-    if (!STARGATE_ASSETS.has(symbol)) continue
-    for (const entry of Object.values(chainMap as Record<number, { oft: string; token: string }>)) {
-      if (getAddress(entry.oft) === oft) isStargate = true
-    }
-  }
+  const isStargate = await detectStargateOft(spokePublicClient, oft)
 
   let hubNativeBalance = 0n
   let estimatedComposeFee = 0n

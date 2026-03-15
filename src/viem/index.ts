@@ -106,6 +106,7 @@ export {
   getAsyncRequestStatus,
   waitForAsyncRequest,
   getVaultStatus,
+  detectStargateOft,
 } from './utils'
 export type { VaultStatus, VaultMode, AsyncRequestFinalResult } from './utils'
 
