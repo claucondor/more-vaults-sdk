@@ -175,6 +175,10 @@ All three modules expose the same logical features. Choose based on your stack.
 | `buildUniswapV3Swap`, `encodeUniswapV3SwapCalldata` | Yes | Yes | — |
 | `quoteCuratorBridgeFee`, `executeCuratorBridge` | Yes | Yes | `useCuratorBridgeQuote`, `useExecuteBridge` |
 | `findBridgeRoute`, `encodeBridgeParams` | Yes | Yes | — |
+| `getSubVaultPositions`, `getVaultPortfolio` | Yes | Yes | `useSubVaultPositions`, `useVaultPortfolio` |
+| `getSubVaultInfo`, `detectSubVaultType` | Yes | Yes | — |
+| `getERC7540RequestStatus` | Yes | Yes | `useERC7540RequestStatus` |
+| `previewSubVaultDeposit`, `previewSubVaultRedeem` | Yes | Yes | — |
 | `detectStargateOft` | Yes | Yes | — |
 | `preflightSync`, `preflightAsync` | Yes | Yes | — |
 | `preflightSpokeDeposit`, `preflightSpokeRedeem` | Yes | Yes | — |
@@ -717,6 +721,49 @@ const txHash = await executeCuratorBridge(
 )
 ```
 
+### Sub-vault operations
+
+Curators invest vault assets into ERC4626/ERC7540 sub-vaults (Aave, Morpho, etc.) to generate yield.
+
+```ts
+import {
+  getSubVaultPositions,
+  getVaultPortfolio,
+  getSubVaultInfo,
+  detectSubVaultType,
+  getERC7540RequestStatus,
+  previewSubVaultDeposit,
+} from '@oydual31/more-vaults-sdk/viem'
+
+// Full portfolio: liquid assets + sub-vault positions
+const portfolio = await getVaultPortfolio(publicClient, VAULT)
+// portfolio.liquidAssets       — AssetBalance[] (tokens held directly)
+// portfolio.subVaultPositions  — SubVaultPosition[] (shares + underlying value)
+// portfolio.totalValue         — total in vault underlying units
+// portfolio.lockedAssets       — locked in pending ERC7540 requests
+
+// Active sub-vault positions with current values
+const positions = await getSubVaultPositions(publicClient, VAULT)
+for (const p of positions) {
+  console.log(`${p.symbol}: ${p.sharesBalance} shares = ${p.underlyingValue} ${p.underlyingSymbol}`)
+}
+
+// Analyze a target sub-vault before investing
+const info = await getSubVaultInfo(publicClient, VAULT, MORPHO_VAULT)
+// info.type           — 'erc4626' or 'erc7540'
+// info.maxDeposit     — capacity remaining
+// info.isWhitelisted  — must be true to invest
+
+// Preview: how many shares would a 1000 USDC deposit yield?
+const shares = await previewSubVaultDeposit(publicClient, MORPHO_VAULT, parseUnits('1000', 6))
+
+// For ERC7540 async sub-vaults: check if requests are ready
+const status = await getERC7540RequestStatus(publicClient, VAULT, ASYNC_VAULT)
+if (status.canFinalizeDeposit) {
+  // Curator can now call erc7540Deposit via submitActions
+}
+```
+
 ---
 
 ## Vault topology & distribution
@@ -893,6 +940,9 @@ Import from `@oydual31/more-vaults-sdk/react`. Requires wagmi v2 + @tanstack/rea
 | `useVetoActions()` | Guardian: cancel pending actions |
 | `useCuratorBridgeQuote()` | Quote LayerZero fee for curator bridge |
 | `useExecuteBridge()` | Execute curator bridge operation |
+| `useSubVaultPositions()` | Active sub-vault positions with values |
+| `useVaultPortfolio()` | Full portfolio: liquid + deployed + locked |
+| `useERC7540RequestStatus()` | Pending/claimable ERC7540 request status |
 
 ### React example
 

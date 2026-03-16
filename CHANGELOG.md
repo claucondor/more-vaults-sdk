@@ -2,6 +2,22 @@
 
 All notable changes to the MoreVaults SDK are documented in this file.
 
+## [0.6.0] - 2026-03-15
+
+### Added
+- **Curator sub-vault operations** — invest, track, and manage positions in ERC4626/ERC7540 sub-vaults:
+  - `getSubVaultPositions` — enumerate active sub-vault positions with share balances and underlying values
+  - `detectSubVaultType` — probe whether a contract is ERC4626 (sync), ERC7540 (async), or unknown
+  - `getSubVaultInfo` — metadata, max deposit capacity, and registry whitelist status for a target sub-vault
+  - `getERC7540RequestStatus` — check pending/claimable deposit and redeem amounts for async sub-vaults
+  - `previewSubVaultDeposit` / `previewSubVaultRedeem` — preview shares/assets for sub-vault operations
+  - `getVaultPortfolio` — full portfolio view: liquid assets + sub-vault positions + locked ERC7540 assets, with double-counting prevention
+  - `SUB_VAULT_ABI` — ERC4626/ERC7540 read functions for sub-vault interaction
+- React hooks: `useSubVaultPositions`, `useVaultPortfolio`, `useERC7540RequestStatus`
+- Available in all three modules: viem, ethers, react
+
+---
+
 ## [0.5.0] - 2026-03-15
 
 ### Added

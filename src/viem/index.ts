@@ -22,6 +22,7 @@ export {
   LZ_ADAPTER_ABI,
   VAULT_ANALYSIS_ABI,
   REGISTRY_ABI,
+  SUB_VAULT_ABI,
 } from './abis'
 
 // --- Types ---
@@ -45,6 +46,10 @@ export type {
   AssetBalance,
   VaultAnalysis,
   VaultAssetBreakdown,
+  SubVaultPosition,
+  SubVaultInfo,
+  ERC7540RequestStatus,
+  VaultPortfolio,
 } from './types'
 export { ActionType } from './types'
 
@@ -185,6 +190,17 @@ export {
   findBridgeRoute,
 } from './curatorBridge'
 export type { CuratorBridgeParams } from './curatorBridge'
+
+// --- Curator Sub-Vault Operations ---
+export {
+  getSubVaultPositions,
+  detectSubVaultType,
+  getSubVaultInfo,
+  getERC7540RequestStatus,
+  previewSubVaultDeposit,
+  previewSubVaultRedeem,
+  getVaultPortfolio,
+} from './curatorSubVaults'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.

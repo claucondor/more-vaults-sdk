@@ -66,3 +66,13 @@ export { useVetoActions } from './useVetoActions.js'
 // --- Curator Bridge hooks ---
 export { useCuratorBridgeQuote } from './useCuratorBridgeQuote.js'
 export { useExecuteBridge } from './useExecuteBridge.js'
+
+// --- Curator Sub-Vault hooks (Phase 5) ---
+export { useSubVaultPositions } from './useSubVaultPositions.js'
+export type { SubVaultPosition } from './useSubVaultPositions.js'
+
+export { useVaultPortfolio } from './useVaultPortfolio.js'
+export type { VaultPortfolio } from './useVaultPortfolio.js'
+
+export { useERC7540RequestStatus } from './useERC7540RequestStatus.js'
+export type { ERC7540RequestStatus } from './useERC7540RequestStatus.js'

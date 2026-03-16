@@ -781,6 +781,30 @@ export const REGISTRY_ABI = [
 ] as const
 
 /**
+ * Sub-vault ABI — reads for ERC4626/ERC7540 sub-vaults and ConfigurationFacet extensions.
+ * Used by curator sub-vault portfolio helpers (Phase 5).
+ */
+export const SUB_VAULT_ABI = [
+  // ConfigurationFacet reads — called on the MoreVaults diamond proxy
+  { type: 'function', name: 'tokensHeld', inputs: [{ name: 'id', type: 'bytes32' }], outputs: [{ name: '', type: 'address[]' }], stateMutability: 'view' },
+  { type: 'function', name: 'lockedTokensAmountOfAsset', inputs: [{ name: 'asset', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+
+  // ERC4626 standard reads — called on the sub-vault contract
+  { type: 'function', name: 'convertToAssets', inputs: [{ name: 'shares', type: 'uint256' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'convertToShares', inputs: [{ name: 'assets', type: 'uint256' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'previewDeposit', inputs: [{ name: 'assets', type: 'uint256' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'previewRedeem', inputs: [{ name: 'shares', type: 'uint256' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'maxDeposit', inputs: [{ name: 'receiver', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'maxRedeem', inputs: [{ name: 'owner', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+
+  // ERC7540 async reads — called on the sub-vault contract
+  { type: 'function', name: 'pendingDepositRequest', inputs: [{ name: 'requestId', type: 'uint256' }, { name: 'controller', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'claimableDepositRequest', inputs: [{ name: 'requestId', type: 'uint256' }, { name: 'controller', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'pendingRedeemRequest', inputs: [{ name: 'requestId', type: 'uint256' }, { name: 'controller', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'claimableRedeemRequest', inputs: [{ name: 'requestId', type: 'uint256' }, { name: 'controller', type: 'address' }], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+] as const
+
+/**
  * Minimal LZ Endpoint V2 ABI for compose queue management.
  * Used by the Stargate 2-TX flow to check compose status and execute pending composes.
  */

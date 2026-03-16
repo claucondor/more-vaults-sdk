@@ -27,6 +27,11 @@ export type {
   VaultAnalysis,
   AssetBalance,
   VaultAssetBreakdown,
+  // Sub-vault types (Phase 5)
+  SubVaultPosition,
+  SubVaultInfo,
+  ERC7540RequestStatus,
+  VaultPortfolio,
 } from "./types";
 export { ActionType } from "./types";
 
@@ -49,6 +54,7 @@ export {
   LZ_ADAPTER_ABI,
   VAULT_ANALYSIS_ABI,
   REGISTRY_ABI,
+  SUB_VAULT_ABI,
 } from "./abis";
 
 // --- Errors ---
@@ -179,6 +185,17 @@ export {
   findBridgeRoute,
 } from "./curatorBridge";
 export type { CuratorBridgeParams } from "./curatorBridge";
+
+// --- Curator Sub-Vault Operations (Phase 5) ---
+export {
+  getSubVaultPositions,
+  detectSubVaultType,
+  getSubVaultInfo,
+  getERC7540RequestStatus,
+  previewSubVaultDeposit,
+  previewSubVaultRedeem,
+  getVaultPortfolio,
+} from "./curatorSubVaults";
 
 // --- Topology ---
 export {

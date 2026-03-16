@@ -177,3 +177,27 @@ export const REGISTRY_ABI = [
   "function isBridgeAllowed(address bridge) view returns (bool)",
   "function getAllowedFacets() view returns (address[])",
 ] as const;
+
+/**
+ * Sub-vault ABI — reads for ERC4626/ERC7540 sub-vaults and ConfigurationFacet extensions.
+ * Used by curator sub-vault portfolio helpers (Phase 5).
+ */
+export const SUB_VAULT_ABI = [
+  // ConfigurationFacet reads — called on the MoreVaults diamond proxy
+  "function tokensHeld(bytes32 id) view returns (address[])",
+  "function lockedTokensAmountOfAsset(address asset) view returns (uint256)",
+
+  // ERC4626 standard reads — called on the sub-vault contract
+  "function convertToAssets(uint256 shares) view returns (uint256)",
+  "function convertToShares(uint256 assets) view returns (uint256)",
+  "function previewDeposit(uint256 assets) view returns (uint256)",
+  "function previewRedeem(uint256 shares) view returns (uint256)",
+  "function maxDeposit(address receiver) view returns (uint256)",
+  "function maxRedeem(address owner) view returns (uint256)",
+
+  // ERC7540 async reads — called on the sub-vault contract
+  "function pendingDepositRequest(uint256 requestId, address controller) view returns (uint256)",
+  "function claimableDepositRequest(uint256 requestId, address controller) view returns (uint256)",
+  "function pendingRedeemRequest(uint256 requestId, address controller) view returns (uint256)",
+  "function claimableRedeemRequest(uint256 requestId, address controller) view returns (uint256)",
+] as const;
