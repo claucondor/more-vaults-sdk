@@ -2,6 +2,19 @@
 
 All notable changes to the MoreVaults SDK are documented in this file.
 
+## [0.5.0] - 2026-03-15
+
+### Added
+- **Curator bridge operations** — quote and execute cross-chain asset bridging via LayerZero:
+  - `quoteCuratorBridgeFee` — quote the LayerZero native fee for bridging
+  - `executeCuratorBridge` — bridge assets between hub and spoke vaults (curator only, pauses vault during bridging)
+  - `findBridgeRoute` — resolve OFT route for a token between two chains
+  - `encodeBridgeParams` — encode the 5-field `bridgeSpecificParams` for `BridgeFacet.executeBridging`
+- React hooks: `useCuratorBridgeQuote`, `useExecuteBridge`
+- Available in all three modules: viem, ethers, react
+
+---
+
 ## [0.4.1] - 2026-03-15
 
 ### Added

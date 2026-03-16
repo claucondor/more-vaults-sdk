@@ -171,6 +171,15 @@ export {
   encodeUniswapV3SwapCalldata,
 } from "./curatorSwaps";
 
+// --- Curator bridge helpers ---
+export {
+  encodeBridgeParams,
+  quoteCuratorBridgeFee,
+  executeCuratorBridge,
+  findBridgeRoute,
+} from "./curatorBridge";
+export type { CuratorBridgeParams } from "./curatorBridge";
+
 // --- Topology ---
 export {
   getVaultTopology,

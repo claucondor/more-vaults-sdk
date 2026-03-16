@@ -62,3 +62,7 @@ export type { CuratorAction } from './useSubmitActions.js'
 export { useExecuteActions } from './useExecuteActions.js'
 
 export { useVetoActions } from './useVetoActions.js'
+
+// --- Curator Bridge hooks ---
+export { useCuratorBridgeQuote } from './useCuratorBridgeQuote.js'
+export { useExecuteBridge } from './useExecuteBridge.js'

@@ -173,6 +173,8 @@ All three modules expose the same logical features. Choose based on your stack.
 | `executeActions` | Yes | Yes | `useExecuteActions` |
 | `vetoActions` | Yes | Yes | `useVetoActions` |
 | `buildUniswapV3Swap`, `encodeUniswapV3SwapCalldata` | Yes | Yes | — |
+| `quoteCuratorBridgeFee`, `executeCuratorBridge` | Yes | Yes | `useCuratorBridgeQuote`, `useExecuteBridge` |
+| `findBridgeRoute`, `encodeBridgeParams` | Yes | Yes | — |
 | `detectStargateOft` | Yes | Yes | — |
 | `preflightSync`, `preflightAsync` | Yes | Yes | — |
 | `preflightSpokeDeposit`, `preflightSpokeRedeem` | Yes | Yes | — |
@@ -675,6 +677,46 @@ const { targetContract, swapCallData } = encodeUniswapV3SwapCalldata({
 })
 ```
 
+### Bridge operations
+
+Curators can bridge assets between hub and spoke vaults via LayerZero. This is a direct curator call (not via multicall) — the vault pauses during bridging for security.
+
+```ts
+import {
+  quoteCuratorBridgeFee,
+  executeCuratorBridge,
+  findBridgeRoute,
+} from '@oydual31/more-vaults-sdk/viem'
+
+// Find the OFT route for USDC between Base and Arbitrum
+const route = findBridgeRoute(8453, 42161, USDC_ADDRESS)
+// route.oftSrc  — OFT on source chain (Stargate USDC on Base)
+// route.oftDst  — OFT on destination chain
+// route.symbol  — 'stgUSDC'
+
+// Quote the LayerZero fee
+const fee = await quoteCuratorBridgeFee(publicClient, VAULT, {
+  oftToken: route.oftSrc,
+  dstEid: 30110,                    // Arbitrum LZ EID
+  amount: parseUnits('1000', 6),    // 1000 USDC
+  dstVault: SPOKE_VAULT_ADDRESS,
+  refundAddress: curatorAddress,
+})
+
+// Execute the bridge (curator only)
+const txHash = await executeCuratorBridge(
+  walletClient, publicClient, VAULT,
+  USDC_ADDRESS,    // underlying ERC-20 token
+  {
+    oftToken: route.oftSrc,
+    dstEid: 30110,
+    amount: parseUnits('1000', 6),
+    dstVault: SPOKE_VAULT_ADDRESS,
+    refundAddress: curatorAddress,
+  },
+)
+```
+
 ---
 
 ## Vault topology & distribution
@@ -849,6 +891,8 @@ Import from `@oydual31/more-vaults-sdk/react`. Requires wagmi v2 + @tanstack/rea
 | `useSubmitActions()` | Submit a batch of curator actions |
 | `useExecuteActions()` | Execute queued actions after timelock |
 | `useVetoActions()` | Guardian: cancel pending actions |
+| `useCuratorBridgeQuote()` | Quote LayerZero fee for curator bridge |
+| `useExecuteBridge()` | Execute curator bridge operation |
 
 ### React example
 

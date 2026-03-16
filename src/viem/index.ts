@@ -178,6 +178,13 @@ export {
   buildUniswapV3Swap,
   encodeUniswapV3SwapCalldata,
 } from './curatorSwaps'
+export {
+  encodeBridgeParams,
+  quoteCuratorBridgeFee,
+  executeCuratorBridge,
+  findBridgeRoute,
+} from './curatorBridge'
+export type { CuratorBridgeParams } from './curatorBridge'
 
 // --- wagmi compatibility ---
 // Re-export viem's PublicClient type for wagmi compatibility.
