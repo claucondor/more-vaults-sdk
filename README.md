@@ -776,7 +776,7 @@ if (status.canFinalizeDeposit) {
 
 ## Vault configuration
 
-Phase 7 — full admin/curator/guardian config reads and writes.
+Full admin/curator/guardian config reads and writes.
 
 ### Reading configuration
 
