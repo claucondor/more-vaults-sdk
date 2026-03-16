@@ -115,7 +115,72 @@ export type CuratorAction =
   | { type: 'erc7540RequestDeposit'; vault: string; assets: bigint }
   | { type: 'erc7540Deposit'; vault: string; assets: bigint }
   | { type: 'erc7540RequestRedeem'; vault: string; shares: bigint }
-  | { type: 'erc7540Redeem'; vault: string; shares: bigint };
+  | { type: 'erc7540Redeem'; vault: string; shares: bigint }
+  // Direct curator actions (Phase 7)
+  | { type: 'addAvailableAsset'; asset: string }
+  | { type: 'addAvailableAssets'; assets: string[] }
+  | { type: 'disableAssetToDeposit'; asset: string }
+  | { type: 'setDepositCapacity'; capacity: bigint }
+  // Timelocked owner actions (Phase 7)
+  | { type: 'setTimeLockPeriod'; period: bigint }
+  | { type: 'setWithdrawalFee'; fee: bigint }
+  | { type: 'setWithdrawalTimelock'; duration: bigint }
+  | { type: 'enableAssetToDeposit'; asset: string }
+  | { type: 'disableDepositWhitelist' }
+  | { type: 'updateWithdrawalQueueStatus'; status: boolean }
+  | { type: 'setMaxWithdrawalDelay'; delay: number }
+  | { type: 'setMaxSlippagePercent'; percent: bigint }
+  | { type: 'setCrossChainAccountingManager'; manager: string }
+  | { type: 'setGasLimitForAccounting'; availableTokenGas: bigint; heldTokenGas: bigint; facetGas: bigint; limit: bigint }
+  | { type: 'setFee'; fee: bigint }
+  // Role transfers (Phase 7)
+  | { type: 'transferOwnership'; newOwner: string }
+  | { type: 'transferCuratorship'; newCurator: string }
+  | { type: 'transferGuardian'; newGuardian: string };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vault Configuration Types (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Full vault configuration snapshot covering roles, fees, capacity, timelock,
+ * withdrawal settings, whitelist, asset lists, cross-chain, and state.
+ */
+export interface VaultConfiguration {
+  // Roles
+  owner: string;
+  pendingOwner: string;
+  curator: string;
+  guardian: string;
+  // Fees
+  fee: bigint;
+  withdrawalFee: bigint;
+  feeRecipient: string;
+  // Capacity & limits
+  depositCapacity: bigint;
+  maxSlippagePercent: bigint;
+  // Timelock
+  timeLockPeriod: bigint;
+  currentNonce: bigint;
+  // Withdrawal config
+  withdrawalQueueEnabled: boolean;
+  withdrawalTimelock: bigint;
+  maxWithdrawalDelay: number;
+  // Whitelist
+  depositWhitelistEnabled: boolean;
+  // Asset lists
+  availableAssets: string[];
+  depositableAssets: string[];
+  // Cross-chain
+  ccManager: string;
+  lzAdapter: string;
+  escrow: string;
+  isHub: boolean;
+  // State
+  paused: boolean;
+  // Registry
+  registry: string;
+}
 
 export interface CuratorVaultStatus {
   curator: string;

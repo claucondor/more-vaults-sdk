@@ -23,6 +23,8 @@ import {
   DEX_ABI,
   ERC7540_FACET_ABI,
   ERC4626_FACET_ABI,
+  ADMIN_WRITE_ABI,
+  TIMELOCK_CONFIG_ABI,
 } from './abis.js'
 import type {
   CuratorAction,
@@ -120,6 +122,139 @@ export function encodeCuratorAction(action: CuratorAction): `0x${string}` {
         abi: ERC7540_FACET_ABI,
         functionName: 'erc7540Redeem',
         args: [getAddress(action.vault), action.shares],
+      })
+
+    // ── Phase 7: Direct curator actions ────────────────────────────────
+    case 'addAvailableAsset':
+      return encodeFunctionData({
+        abi: ADMIN_WRITE_ABI,
+        functionName: 'addAvailableAsset',
+        args: [getAddress(action.asset)],
+      })
+
+    case 'addAvailableAssets':
+      return encodeFunctionData({
+        abi: ADMIN_WRITE_ABI,
+        functionName: 'addAvailableAssets',
+        args: [action.assets.map(getAddress)],
+      })
+
+    case 'disableAssetToDeposit':
+      return encodeFunctionData({
+        abi: ADMIN_WRITE_ABI,
+        functionName: 'disableAssetToDeposit',
+        args: [getAddress(action.asset)],
+      })
+
+    case 'setDepositCapacity':
+      return encodeFunctionData({
+        abi: ADMIN_WRITE_ABI,
+        functionName: 'setDepositCapacity',
+        args: [action.capacity],
+      })
+
+    // ── Phase 7: Timelocked owner actions ──────────────────────────────
+    case 'setTimeLockPeriod':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setTimeLockPeriod',
+        args: [action.period],
+      })
+
+    case 'setWithdrawalFee':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setWithdrawalFee',
+        args: [action.fee],
+      })
+
+    case 'setWithdrawalTimelock':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setWithdrawalTimelock',
+        args: [action.duration],
+      })
+
+    case 'enableAssetToDeposit':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'enableAssetToDeposit',
+        args: [getAddress(action.asset)],
+      })
+
+    case 'disableDepositWhitelist':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'disableDepositWhitelist',
+      })
+
+    case 'updateWithdrawalQueueStatus':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'updateWithdrawalQueueStatus',
+        args: [action.status],
+      })
+
+    case 'setMaxWithdrawalDelay':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setMaxWithdrawalDelay',
+        args: [action.delay],
+      })
+
+    case 'setMaxSlippagePercent':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setMaxSlippagePercent',
+        args: [action.percent],
+      })
+
+    case 'setCrossChainAccountingManager':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setCrossChainAccountingManager',
+        args: [getAddress(action.manager)],
+      })
+
+    case 'setGasLimitForAccounting':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setGasLimitForAccounting',
+        args: [
+          Number(action.availableTokenGas),
+          Number(action.heldTokenGas),
+          Number(action.facetGas),
+          Number(action.limit),
+        ],
+      })
+
+    case 'setFee':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'setFee',
+        args: [action.fee],
+      })
+
+    // ── Phase 7: Role transfers ────────────────────────────────────────
+    case 'transferOwnership':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'transferOwnership',
+        args: [getAddress(action.newOwner)],
+      })
+
+    case 'transferCuratorship':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'transferCuratorship',
+        args: [getAddress(action.newCurator)],
+      })
+
+    case 'transferGuardian':
+      return encodeFunctionData({
+        abi: TIMELOCK_CONFIG_ABI,
+        functionName: 'transferGuardian',
+        args: [getAddress(action.newGuardian)],
       })
 
     default: {

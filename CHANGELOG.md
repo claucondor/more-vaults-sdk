@@ -2,6 +2,27 @@
 
 All notable changes to the MoreVaults SDK are documented in this file.
 
+## [1.0.0] - 2026-03-16
+
+### Added
+- **Vault Configuration** — complete admin/curator/guardian config read and write operations:
+  - `getVaultConfiguration` — single multicall reading 22+ config fields: roles (owner, curator, guardian), fees, capacity, timelock, withdrawal config, whitelist status, asset lists, cross-chain settings
+  - **Curator direct actions**: `setDepositCapacity`, `addAvailableAsset`, `addAvailableAssets`, `disableAssetToDeposit`
+  - **Owner direct actions**: `setFeeRecipient`, `setDepositWhitelist`, `enableDepositWhitelist`, `pauseVault`, `unpauseVault`
+  - **Guardian action**: `recoverAssets`
+  - **Pending owner**: `acceptOwnership`
+- **19 new `CuratorAction` types** for timelocked operations via `submitActions`:
+  - Config: `setTimeLockPeriod`, `setWithdrawalFee`, `setWithdrawalTimelock`, `enableAssetToDeposit`, `disableDepositWhitelist`, `updateWithdrawalQueueStatus`, `setMaxWithdrawalDelay`, `setMaxSlippagePercent`, `setCrossChainAccountingManager`, `setGasLimitForAccounting`, `setFee`
+  - Role transfers: `transferOwnership`, `transferCuratorship`, `transferGuardian`
+- **New ABIs**: `ADMIN_CONFIG_ABI`, `ACCESS_CONTROL_ABI`, `ADMIN_WRITE_ABI`, `TIMELOCK_CONFIG_ABI`
+- **React hook**: `useVaultConfiguration`
+- Available in all three modules: viem, ethers, react
+
+### Changed
+- **v1.0.0 milestone** — SDK is feature-complete covering deposits, redeems, cross-chain flows, curator operations, bridge operations, sub-vault management, and full vault configuration
+
+---
+
 ## [0.6.1] - 2026-03-15
 
 ### Added

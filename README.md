@@ -1,5 +1,7 @@
 # @oydual31/more-vaults-sdk
 
+> **v1.0.0** — feature-complete SDK for MoreVaults: deposits, redeems, cross-chain flows, curator operations, bridge operations, sub-vault management, and full vault configuration.
+
 TypeScript SDK for the MoreVaults protocol. Supports **viem/wagmi**, **ethers.js v6**, and **React hooks**.
 
 ```bash
@@ -19,14 +21,15 @@ npm install @oydual31/more-vaults-sdk
 7. [Redeem flows (R1–R5)](#redeem-flows)
 8. [Cross-chain flows](#cross-chain-flows)
 9. [Curator operations](#curator-operations)
-10. [Vault topology & distribution](#vault-topology--distribution)
-11. [Spoke routes](#spoke-routes)
-12. [React hooks reference](#react-hooks-reference)
-13. [Stargate vs Standard OFT handling](#stargate-vs-standard-oft-handling)
-14. [Supported chains](#supported-chains)
-15. [LZ timeouts](#lz-timeouts)
-16. [Pre-flight validation](#pre-flight-validation)
-17. [Error types](#error-types)
+10. [Vault configuration](#vault-configuration)
+11. [Vault topology & distribution](#vault-topology--distribution)
+12. [Spoke routes](#spoke-routes)
+13. [React hooks reference](#react-hooks-reference)
+14. [Stargate vs Standard OFT handling](#stargate-vs-standard-oft-handling)
+15. [Supported chains](#supported-chains)
+16. [LZ timeouts](#lz-timeouts)
+17. [Pre-flight validation](#pre-flight-validation)
+18. [Error types](#error-types)
 
 ---
 
@@ -179,6 +182,11 @@ All three modules expose the same logical features. Choose based on your stack.
 | `getSubVaultInfo`, `detectSubVaultType` | Yes | Yes | — |
 | `getERC7540RequestStatus` | Yes | Yes | `useERC7540RequestStatus` |
 | `previewSubVaultDeposit`, `previewSubVaultRedeem` | Yes | Yes | — |
+| `getVaultConfiguration` | Yes | Yes | `useVaultConfiguration` |
+| `setDepositCapacity`, `addAvailableAsset(s)`, `disableAssetToDeposit` | Yes | Yes | — |
+| `setFeeRecipient`, `pauseVault`, `unpauseVault`, `setDepositWhitelist`, `enableDepositWhitelist` | Yes | Yes | — |
+| `recoverAssets` (guardian), `acceptOwnership` | Yes | Yes | — |
+| 19 timelocked `CuratorAction` types (config + role transfers) | Yes | Yes | — |
 | `detectStargateOft` | Yes | Yes | — |
 | `preflightSync`, `preflightAsync` | Yes | Yes | — |
 | `preflightSpokeDeposit`, `preflightSpokeRedeem` | Yes | Yes | — |
@@ -766,6 +774,132 @@ if (status.canFinalizeDeposit) {
 
 ---
 
+## Vault configuration
+
+Phase 7 — full admin/curator/guardian config reads and writes.
+
+### Reading configuration
+
+`getVaultConfiguration` reads 22+ fields in a single multicall:
+
+```ts
+import { getVaultConfiguration } from '@oydual31/more-vaults-sdk/viem'
+
+const config = await getVaultConfiguration(publicClient, VAULT)
+// Roles
+config.owner              // current owner
+config.curator            // current curator
+config.guardian           // current guardian
+config.pendingOwner       // pending ownership transfer target
+
+// Fees & capacity
+config.fee                // management fee (basis points)
+config.feeRecipient       // fee recipient address
+config.depositCapacity    // max deposit capacity
+config.withdrawalFee      // withdrawal fee
+
+// Timelock & withdrawal
+config.timeLockPeriod     // seconds before queued actions execute
+config.withdrawalTimelockSeconds
+config.withdrawalQueueEnabled
+config.maxWithdrawalDelay
+
+// Access
+config.depositWhitelistEnabled
+config.paused
+
+// Assets
+config.availableAssets    // address[] — all whitelisted assets
+config.depositableAssets  // address[] — assets enabled for deposits
+
+// Cross-chain
+config.crossChainAccountingManager
+config.gasLimitForAccounting
+config.maxSlippagePercent
+```
+
+### Direct curator actions
+
+No timelock — execute immediately when called by the curator:
+
+```ts
+import {
+  setDepositCapacity,
+  addAvailableAsset,
+  addAvailableAssets,
+  disableAssetToDeposit,
+} from '@oydual31/more-vaults-sdk/viem'
+
+await setDepositCapacity(walletClient, publicClient, VAULT, parseUnits('1000000', 6))
+await addAvailableAsset(walletClient, publicClient, VAULT, TOKEN_ADDRESS)
+await addAvailableAssets(walletClient, publicClient, VAULT, [TOKEN_A, TOKEN_B])
+await disableAssetToDeposit(walletClient, publicClient, VAULT, TOKEN_ADDRESS)
+```
+
+### Direct owner actions
+
+```ts
+import {
+  setFeeRecipient,
+  setDepositWhitelist,
+  enableDepositWhitelist,
+  pauseVault,
+  unpauseVault,
+} from '@oydual31/more-vaults-sdk/viem'
+
+await setFeeRecipient(walletClient, publicClient, VAULT, recipientAddress)
+await pauseVault(walletClient, publicClient, VAULT)
+await unpauseVault(walletClient, publicClient, VAULT)
+```
+
+### Guardian and pending owner actions
+
+```ts
+import { recoverAssets, acceptOwnership } from '@oydual31/more-vaults-sdk/viem'
+
+// Guardian: recover stuck assets
+await recoverAssets(guardianWalletClient, publicClient, VAULT, TOKEN_ADDRESS, amount, recipientAddress)
+
+// Pending owner: accept ownership transfer
+await acceptOwnership(newOwnerWalletClient, publicClient, VAULT)
+```
+
+### Timelocked actions via submitActions
+
+19 new `CuratorAction` types that go through the timelock queue:
+
+```ts
+import { encodeCuratorAction, buildCuratorBatch, submitActions } from '@oydual31/more-vaults-sdk/viem'
+
+// Config changes
+const actions: CuratorAction[] = [
+  { type: 'setTimeLockPeriod', period: 86400 },
+  { type: 'setWithdrawalFee', fee: 50n },          // 0.5%
+  { type: 'setFee', fee: 200n },                    // 2% management fee
+  { type: 'enableAssetToDeposit', asset: TOKEN },
+  { type: 'disableDepositWhitelist' },
+  { type: 'updateWithdrawalQueueStatus', enabled: true },
+  { type: 'setMaxWithdrawalDelay', delay: 604800 },
+  { type: 'setMaxSlippagePercent', percent: 100n },
+  { type: 'setCrossChainAccountingManager', manager: LZ_ADAPTER },
+  { type: 'setGasLimitForAccounting', gasLimit: 500000n },
+  { type: 'setWithdrawalTimelock', timelock: 3600 },
+]
+
+// Role transfers
+const roleActions: CuratorAction[] = [
+  { type: 'transferOwnership', newOwner: NEW_OWNER },
+  { type: 'transferCuratorship', newCurator: NEW_CURATOR },
+  { type: 'transferGuardian', newGuardian: NEW_GUARDIAN },
+]
+
+const batch = buildCuratorBatch(actions)
+const { nonce } = await submitActions(walletClient, publicClient, VAULT, batch)
+// Wait for timelock, then: executeActions(walletClient, publicClient, VAULT, nonce)
+```
+
+---
+
 ## Vault topology & distribution
 
 ### Topology
@@ -908,6 +1042,7 @@ Import from `@oydual31/more-vaults-sdk/react`. Requires wagmi v2 + @tanstack/rea
 | `useVaultTopology(vault)` | `VaultTopology` | Hub/spoke chain structure |
 | `useVaultDistribution(vault)` | `VaultDistribution` | TVL breakdown across chains |
 | `useInboundRoutes(hubChainId, vault, asset, user)` | `InboundRoute[]` | Available deposit routes |
+| `useVaultPortfolioMultiChain(vault)` | `MultiChainPortfolio` | Cross-chain portfolio aggregation across hub + all spokes |
 
 ### Action hooks
 
@@ -924,6 +1059,7 @@ Import from `@oydual31/more-vaults-sdk/react`. Requires wagmi v2 + @tanstack/rea
 
 | Hook | Returns | Description |
 |------|---------|-------------|
+| `useVaultConfiguration(vault)` | `VaultConfiguration` | Full 22+ field config snapshot (roles, fees, capacity, timelock, assets, cross-chain) |
 | `useCuratorVaultStatus(vault)` | `CuratorVaultStatus` | Curator, timelock, nonce, assets, LZ adapter |
 | `useVaultAnalysis(vault)` | `VaultAnalysis` | Available/depositable assets with metadata |
 | `useVaultAssetBreakdown(vault)` | `VaultAssetBreakdown` | Per-asset balance breakdown |

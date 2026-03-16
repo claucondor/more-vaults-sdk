@@ -81,6 +81,67 @@ export const OFT_ABI = [
   "function quoteSend(tuple(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd) sendParam, bool payInLzToken) view returns (tuple(uint256 nativeFee, uint256 lzTokenFee))",
 ] as const;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin / Configuration ABIs (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * IConfigurationFacet read-only ABI for admin config fields.
+ */
+export const ADMIN_CONFIG_ABI = [
+  "function fee() view returns (uint96)",
+  "function feeRecipient() view returns (address)",
+  "function depositCapacity() view returns (uint256)",
+  "function getWithdrawalFee() view returns (uint96)",
+  "function getMaxWithdrawalDelay() view returns (uint32)",
+] as const;
+
+/**
+ * IAccessControlFacet read-only ABI for role queries.
+ */
+export const ACCESS_CONTROL_ABI = [
+  "function owner() view returns (address)",
+  "function pendingOwner() view returns (address)",
+  "function guardian() view returns (address)",
+] as const;
+
+/**
+ * Direct admin/curator/guardian write ABI -- functions called directly (not via submitActions).
+ */
+export const ADMIN_WRITE_ABI = [
+  "function setFeeRecipient(address _feeRecipient)",
+  "function setDepositCapacity(uint256 _depositCapacity)",
+  "function setDepositWhitelist(address[] depositors, uint256[] caps)",
+  "function enableDepositWhitelist()",
+  "function addAvailableAsset(address asset)",
+  "function addAvailableAssets(address[] assets)",
+  "function disableAssetToDeposit(address asset)",
+  "function recoverAssets(address asset, address receiver, uint256 amount)",
+  "function pause()",
+  "function unpause()",
+  "function acceptOwnership()",
+] as const;
+
+/**
+ * Timelocked configuration ABI -- functions that go through submitActions for encoding only.
+ */
+export const TIMELOCK_CONFIG_ABI = [
+  "function setTimeLockPeriod(uint256 _timeLockPeriod)",
+  "function disableDepositWhitelist()",
+  "function enableAssetToDeposit(address asset)",
+  "function setWithdrawalFee(uint96 _withdrawalFee)",
+  "function setWithdrawalTimelock(uint64 _withdrawalTimelock)",
+  "function updateWithdrawalQueueStatus(bool _status)",
+  "function setMaxWithdrawalDelay(uint32 _maxWithdrawalDelay)",
+  "function setMaxSlippagePercent(uint256 _maxSlippagePercent)",
+  "function setCrossChainAccountingManager(address _manager)",
+  "function setGasLimitForAccounting(uint48 availableTokenGas, uint48 heldTokenGas, uint48 facetGas, uint48 limit)",
+  "function setFee(uint96 _fee)",
+  "function transferOwnership(address newOwner)",
+  "function transferCuratorship(address newCurator)",
+  "function transferGuardian(address newGuardian)",
+] as const;
+
 export const LZ_ENDPOINT_ABI = [
   "function composeQueue(address from, address to, bytes32 guid, uint16 index) view returns (bytes32 messageHash)",
   "function lzCompose(address _from, address _to, bytes32 _guid, uint16 _index, bytes _message, bytes _extraData) payable",

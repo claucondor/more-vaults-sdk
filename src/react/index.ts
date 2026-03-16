@@ -79,3 +79,7 @@ export type { MultiChainPortfolio } from './useVaultPortfolioMultiChain.js'
 
 export { useERC7540RequestStatus } from './useERC7540RequestStatus.js'
 export type { ERC7540RequestStatus } from './useERC7540RequestStatus.js'
+
+// --- Vault Configuration (Phase 7) ---
+export { useVaultConfiguration } from './useVaultConfiguration.js'
+export type { VaultConfiguration } from './useVaultConfiguration.js'

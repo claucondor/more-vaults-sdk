@@ -145,6 +145,71 @@ export type CuratorAction =
   | { type: 'erc7540Deposit'; vault: Address; assets: bigint }
   | { type: 'erc7540RequestRedeem'; vault: Address; shares: bigint }
   | { type: 'erc7540Redeem'; vault: Address; shares: bigint }
+  // Direct curator actions (Phase 7)
+  | { type: 'addAvailableAsset'; asset: Address }
+  | { type: 'addAvailableAssets'; assets: Address[] }
+  | { type: 'disableAssetToDeposit'; asset: Address }
+  | { type: 'setDepositCapacity'; capacity: bigint }
+  // Timelocked owner actions (Phase 7)
+  | { type: 'setTimeLockPeriod'; period: bigint }
+  | { type: 'setWithdrawalFee'; fee: bigint }
+  | { type: 'setWithdrawalTimelock'; duration: bigint }
+  | { type: 'enableAssetToDeposit'; asset: Address }
+  | { type: 'disableDepositWhitelist' }
+  | { type: 'updateWithdrawalQueueStatus'; status: boolean }
+  | { type: 'setMaxWithdrawalDelay'; delay: number }
+  | { type: 'setMaxSlippagePercent'; percent: bigint }
+  | { type: 'setCrossChainAccountingManager'; manager: Address }
+  | { type: 'setGasLimitForAccounting'; availableTokenGas: bigint; heldTokenGas: bigint; facetGas: bigint; limit: bigint }
+  | { type: 'setFee'; fee: bigint }
+  // Role transfers (Phase 7)
+  | { type: 'transferOwnership'; newOwner: Address }
+  | { type: 'transferCuratorship'; newCurator: Address }
+  | { type: 'transferGuardian'; newGuardian: Address }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vault Configuration Types (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Full vault configuration snapshot covering roles, fees, capacity, timelock,
+ * withdrawal settings, whitelist, asset lists, cross-chain, and state.
+ */
+export interface VaultConfiguration {
+  // Roles
+  owner: Address
+  pendingOwner: Address
+  curator: Address
+  guardian: Address
+  // Fees
+  fee: bigint          // deposit fee (bps)
+  withdrawalFee: bigint
+  feeRecipient: Address
+  // Capacity & limits
+  depositCapacity: bigint
+  maxSlippagePercent: bigint
+  // Timelock
+  timeLockPeriod: bigint
+  currentNonce: bigint
+  // Withdrawal config
+  withdrawalQueueEnabled: boolean
+  withdrawalTimelock: bigint
+  maxWithdrawalDelay: number
+  // Whitelist
+  depositWhitelistEnabled: boolean
+  // Asset lists
+  availableAssets: Address[]
+  depositableAssets: Address[]
+  // Cross-chain
+  ccManager: Address
+  lzAdapter: Address
+  escrow: Address
+  isHub: boolean
+  // State
+  paused: boolean
+  // Registry
+  registry: Address
+}
 
 export interface CuratorVaultStatus {
   curator: Address

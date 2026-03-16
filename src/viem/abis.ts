@@ -808,6 +808,67 @@ export const SUB_VAULT_ABI = [
  * Minimal LZ Endpoint V2 ABI for compose queue management.
  * Used by the Stargate 2-TX flow to check compose status and execute pending composes.
  */
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin / Configuration ABIs (Phase 7)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * IConfigurationFacet read-only ABI for admin config fields.
+ */
+export const ADMIN_CONFIG_ABI = [
+  { type: 'function', name: 'fee', inputs: [], outputs: [{ name: '', type: 'uint96' }], stateMutability: 'view' },
+  { type: 'function', name: 'feeRecipient', inputs: [], outputs: [{ name: '', type: 'address' }], stateMutability: 'view' },
+  { type: 'function', name: 'depositCapacity', inputs: [], outputs: [{ name: '', type: 'uint256' }], stateMutability: 'view' },
+  { type: 'function', name: 'getWithdrawalFee', inputs: [], outputs: [{ name: '', type: 'uint96' }], stateMutability: 'view' },
+  { type: 'function', name: 'getMaxWithdrawalDelay', inputs: [], outputs: [{ name: '', type: 'uint32' }], stateMutability: 'view' },
+] as const
+
+/**
+ * IAccessControlFacet read-only ABI for role queries.
+ */
+export const ACCESS_CONTROL_ABI = [
+  { type: 'function', name: 'owner', inputs: [], outputs: [{ name: '', type: 'address' }], stateMutability: 'view' },
+  { type: 'function', name: 'pendingOwner', inputs: [], outputs: [{ name: '', type: 'address' }], stateMutability: 'view' },
+  { type: 'function', name: 'guardian', inputs: [], outputs: [{ name: '', type: 'address' }], stateMutability: 'view' },
+] as const
+
+/**
+ * Direct admin/curator/guardian write ABI — functions called directly (not via submitActions).
+ */
+export const ADMIN_WRITE_ABI = [
+  { type: 'function', name: 'setFeeRecipient', inputs: [{ name: '_feeRecipient', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setDepositCapacity', inputs: [{ name: '_depositCapacity', type: 'uint256' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setDepositWhitelist', inputs: [{ name: 'depositors', type: 'address[]' }, { name: 'caps', type: 'uint256[]' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'enableDepositWhitelist', inputs: [], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'addAvailableAsset', inputs: [{ name: 'asset', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'addAvailableAssets', inputs: [{ name: 'assets', type: 'address[]' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'disableAssetToDeposit', inputs: [{ name: 'asset', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'recoverAssets', inputs: [{ name: 'asset', type: 'address' }, { name: 'receiver', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'pause', inputs: [], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'unpause', inputs: [], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'acceptOwnership', inputs: [], outputs: [], stateMutability: 'nonpayable' },
+] as const
+
+/**
+ * Timelocked configuration ABI — functions that go through submitActions for encoding only.
+ */
+export const TIMELOCK_CONFIG_ABI = [
+  { type: 'function', name: 'setTimeLockPeriod', inputs: [{ name: '_timeLockPeriod', type: 'uint256' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'disableDepositWhitelist', inputs: [], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'enableAssetToDeposit', inputs: [{ name: 'asset', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setWithdrawalFee', inputs: [{ name: '_withdrawalFee', type: 'uint96' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setWithdrawalTimelock', inputs: [{ name: '_withdrawalTimelock', type: 'uint64' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'updateWithdrawalQueueStatus', inputs: [{ name: '_status', type: 'bool' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setMaxWithdrawalDelay', inputs: [{ name: '_maxWithdrawalDelay', type: 'uint32' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setMaxSlippagePercent', inputs: [{ name: '_maxSlippagePercent', type: 'uint256' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setCrossChainAccountingManager', inputs: [{ name: '_manager', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setGasLimitForAccounting', inputs: [{ name: 'availableTokenGas', type: 'uint48' }, { name: 'heldTokenGas', type: 'uint48' }, { name: 'facetGas', type: 'uint48' }, { name: 'limit', type: 'uint48' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'setFee', inputs: [{ name: '_fee', type: 'uint96' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'transferOwnership', inputs: [{ name: 'newOwner', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'transferCuratorship', inputs: [{ name: 'newCurator', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+  { type: 'function', name: 'transferGuardian', inputs: [{ name: 'newGuardian', type: 'address' }], outputs: [], stateMutability: 'nonpayable' },
+] as const
+
 export const LZ_ENDPOINT_ABI = [
   {
     type: 'function',

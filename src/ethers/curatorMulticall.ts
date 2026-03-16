@@ -14,6 +14,8 @@ import {
   DEX_ABI,
   ERC7540_FACET_ABI,
   ERC4626_FACET_ABI,
+  ADMIN_WRITE_ABI,
+  TIMELOCK_CONFIG_ABI,
 } from "./abis";
 import type { CuratorAction, SubmitActionsResult } from "./types";
 
@@ -92,6 +94,104 @@ export function encodeCuratorAction(action: CuratorAction): string {
     case 'erc7540Redeem': {
       const iface = new Interface(ERC7540_FACET_ABI as unknown as string[]);
       return iface.encodeFunctionData("erc7540Redeem", [action.vault, action.shares]);
+    }
+
+    // ── Phase 7: Direct curator actions ────────────────────────────────
+    case 'addAvailableAsset': {
+      const iface = new Interface(ADMIN_WRITE_ABI as unknown as string[]);
+      return iface.encodeFunctionData("addAvailableAsset", [action.asset]);
+    }
+
+    case 'addAvailableAssets': {
+      const iface = new Interface(ADMIN_WRITE_ABI as unknown as string[]);
+      return iface.encodeFunctionData("addAvailableAssets", [action.assets]);
+    }
+
+    case 'disableAssetToDeposit': {
+      const iface = new Interface(ADMIN_WRITE_ABI as unknown as string[]);
+      return iface.encodeFunctionData("disableAssetToDeposit", [action.asset]);
+    }
+
+    case 'setDepositCapacity': {
+      const iface = new Interface(ADMIN_WRITE_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setDepositCapacity", [action.capacity]);
+    }
+
+    // ── Phase 7: Timelocked owner actions ──────────────────────────────
+    case 'setTimeLockPeriod': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setTimeLockPeriod", [action.period]);
+    }
+
+    case 'setWithdrawalFee': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setWithdrawalFee", [action.fee]);
+    }
+
+    case 'setWithdrawalTimelock': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setWithdrawalTimelock", [action.duration]);
+    }
+
+    case 'enableAssetToDeposit': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("enableAssetToDeposit", [action.asset]);
+    }
+
+    case 'disableDepositWhitelist': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("disableDepositWhitelist");
+    }
+
+    case 'updateWithdrawalQueueStatus': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("updateWithdrawalQueueStatus", [action.status]);
+    }
+
+    case 'setMaxWithdrawalDelay': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setMaxWithdrawalDelay", [action.delay]);
+    }
+
+    case 'setMaxSlippagePercent': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setMaxSlippagePercent", [action.percent]);
+    }
+
+    case 'setCrossChainAccountingManager': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setCrossChainAccountingManager", [action.manager]);
+    }
+
+    case 'setGasLimitForAccounting': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setGasLimitForAccounting", [
+        action.availableTokenGas,
+        action.heldTokenGas,
+        action.facetGas,
+        action.limit,
+      ]);
+    }
+
+    case 'setFee': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("setFee", [action.fee]);
+    }
+
+    // ── Phase 7: Role transfers ────────────────────────────────────────
+    case 'transferOwnership': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("transferOwnership", [action.newOwner]);
+    }
+
+    case 'transferCuratorship': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("transferCuratorship", [action.newCurator]);
+    }
+
+    case 'transferGuardian': {
+      const iface = new Interface(TIMELOCK_CONFIG_ABI as unknown as string[]);
+      return iface.encodeFunctionData("transferGuardian", [action.newGuardian]);
     }
 
     default: {

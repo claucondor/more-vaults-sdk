@@ -22,6 +22,7 @@ export type {
   PendingAction,
   SubmitActionsResult,
   CuratorAction,
+  VaultConfiguration,
   CuratorVaultStatus,
   AssetInfo,
   VaultAnalysis,
@@ -57,6 +58,10 @@ export {
   VAULT_ANALYSIS_ABI,
   REGISTRY_ABI,
   SUB_VAULT_ABI,
+  ADMIN_CONFIG_ABI,
+  ACCESS_CONTROL_ABI,
+  ADMIN_WRITE_ABI,
+  TIMELOCK_CONFIG_ABI,
 } from "./abis";
 
 // --- Errors ---
@@ -187,6 +192,24 @@ export {
   findBridgeRoute,
 } from "./curatorBridge";
 export type { CuratorBridgeParams } from "./curatorBridge";
+
+// --- Vault Configuration (Phase 7) ---
+export { getVaultConfiguration } from "./vaultConfig";
+
+// --- Admin Actions (Phase 7) ---
+export {
+  setDepositCapacity,
+  addAvailableAsset,
+  addAvailableAssets,
+  disableAssetToDeposit,
+  setFeeRecipient,
+  setDepositWhitelist,
+  enableDepositWhitelist,
+  pauseVault,
+  unpauseVault,
+  recoverAssets,
+  acceptOwnership,
+} from "./adminActions";
 
 // --- Curator Sub-Vault Operations (Phase 5) ---
 export {
