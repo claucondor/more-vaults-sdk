@@ -2,6 +2,15 @@
 
 All notable changes to the MoreVaults SDK are documented in this file.
 
+## [0.6.1] - 2026-03-15
+
+### Added
+- **`getVaultPortfolioMultiChain`** — full cross-chain portfolio view that auto-discovers spokes via topology, fetches hub + spoke portfolios in parallel, and aggregates liquid assets, sub-vault positions, and locked assets across all chains
+- React hook: `useVaultPortfolioMultiChain`
+- Types: `ChainPortfolio`, `MultiChainPortfolio`
+
+---
+
 ## [0.6.0] - 2026-03-15
 
 ### Added

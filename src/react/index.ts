@@ -74,5 +74,8 @@ export type { SubVaultPosition } from './useSubVaultPositions.js'
 export { useVaultPortfolio } from './useVaultPortfolio.js'
 export type { VaultPortfolio } from './useVaultPortfolio.js'
 
+export { useVaultPortfolioMultiChain } from './useVaultPortfolioMultiChain.js'
+export type { MultiChainPortfolio } from './useVaultPortfolioMultiChain.js'
+
 export { useERC7540RequestStatus } from './useERC7540RequestStatus.js'
 export type { ERC7540RequestStatus } from './useERC7540RequestStatus.js'

@@ -272,6 +272,58 @@ export interface ERC7540RequestStatus {
   canFinalizeRedeem: boolean
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Multi-chain Portfolio Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Portfolio snapshot for a single chain (hub or spoke).
+ */
+export interface ChainPortfolio {
+  /** EVM chain ID */
+  chainId: number
+  /** Vault address on this chain (same on all chains via CREATE3) */
+  vault: Address
+  /** Whether this chain is the hub or a spoke */
+  role: 'hub' | 'spoke'
+  /** Full portfolio on this chain */
+  portfolio: VaultPortfolio
+}
+
+/**
+ * Aggregated multi-chain portfolio across hub and all spoke chains.
+ *
+ * Note: `totalLiquidValue`, `totalDeployedValue`, and `totalLockedValue` are
+ * raw bigint sums across chains. Because each chain may use a different
+ * underlying token, callers are responsible for interpreting units
+ * (in practice, MoreVaults uses the same underlying on all chains).
+ */
+export interface MultiChainPortfolio {
+  /** Chain ID of the hub vault */
+  hubChainId: number
+  /** Per-chain portfolio breakdowns (hub first, then spokes) */
+  chains: ChainPortfolio[]
+  /**
+   * Sum of liquid underlying balances across all chains.
+   * Computed as: sum(chain.portfolio.totalValue - subVaultDeployedValue) per chain.
+   * For the authoritative AUM, prefer the hub's `totalAssets` which already
+   * includes spoke values via LZ Read.
+   */
+  totalLiquidValue: bigint
+  /**
+   * Sum of all sub-vault position underlying values across all chains.
+   */
+  totalDeployedValue: bigint
+  /**
+   * Sum of lockedAssets (pending ERC7540 requests) across all chains.
+   */
+  totalLockedValue: bigint
+  /**
+   * All sub-vault positions across all chains, each tagged with its chainId.
+   */
+  allSubVaultPositions: Array<SubVaultPosition & { chainId: number }>
+}
+
 /**
  * Full portfolio view for a curator vault combining liquid and invested assets.
  */

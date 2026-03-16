@@ -24,7 +24,11 @@ import type {
   ERC7540RequestStatus,
   VaultPortfolio,
   AssetBalance,
+  ChainPortfolio,
+  MultiChainPortfolio,
 } from "./types";
+import { discoverVaultTopology } from "./topology";
+import { createChainProvider } from "./chains";
 
 // Multicall3 — deployed at the same address on every EVM chain
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -439,5 +443,126 @@ export async function getVaultPortfolio(
     totalAssets,
     totalSupply,
     lockedAssets,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Get the full portfolio of a vault across its hub chain and all spoke chains.
+ *
+ * Steps:
+ * 1. Discovers topology via `discoverVaultTopology` (hub + spoke chain IDs).
+ * 2. Creates providers for each spoke via `createChainProvider`.
+ * 3. Calls `getVaultPortfolio()` on the hub and each reachable spoke in parallel.
+ * 4. Aggregates totals and flattens sub-vault positions with chainId tags.
+ *
+ * Because MoreVaults uses CREATE3, the vault address is identical on all chains.
+ * Spoke chains where no public RPC is available (createChainProvider returns null)
+ * are skipped with a console warning.
+ *
+ * @param provider    Read-only provider connected to any chain (used as hint for topology discovery)
+ * @param vault       Vault address (same on all chains via CREATE3)
+ * @param hubChainId  Optional — if known, skips topology discovery for hub client selection
+ * @returns           MultiChainPortfolio aggregating hub + all spoke chains
+ *
+ * @example
+ * const provider = new JsonRpcProvider('https://mainnet.base.org')
+ * const portfolio = await getVaultPortfolioMultiChain(provider, '0x8f740...')
+ * console.log(portfolio.chains.length) // hub + N spokes
+ * console.log(portfolio.totalDeployedValue) // sum of sub-vault positions
+ */
+export async function getVaultPortfolioMultiChain(
+  provider: Provider,
+  vault: string,
+  hubChainId?: number,
+): Promise<MultiChainPortfolio> {
+  // Step 1: discover topology
+  const topology = await discoverVaultTopology(vault, provider);
+  const resolvedHubChainId = hubChainId ?? topology.hubChainId;
+  const spokeChainIds = topology.spokeChainIds;
+
+  // Step 2: build providers for hub and each spoke
+  // Hub: use provided provider if it matches hubChainId, else create one
+  let hubProvider: Provider = provider;
+  try {
+    const network = await provider.getNetwork();
+    if (Number(network.chainId) !== resolvedHubChainId) {
+      const created = createChainProvider(resolvedHubChainId);
+      if (created) hubProvider = created;
+    }
+  } catch {
+    const created = createChainProvider(resolvedHubChainId);
+    if (created) hubProvider = created;
+  }
+
+  // Spoke providers: create via createChainProvider, skip if unavailable
+  const spokeEntries: Array<{ chainId: number; provider: Provider }> = [];
+  for (const chainId of spokeChainIds) {
+    const spokeProvider = createChainProvider(chainId);
+    if (!spokeProvider) {
+      console.warn(`[getVaultPortfolioMultiChain] No RPC available for spoke chainId ${chainId} — skipping`);
+      continue;
+    }
+    spokeEntries.push({ chainId, provider: spokeProvider });
+  }
+
+  // Step 3: fetch portfolios in parallel
+  const [hubPortfolio, ...spokePortfolios] = await Promise.all([
+    getVaultPortfolio(hubProvider, vault).catch((err) => {
+      console.warn(`[getVaultPortfolioMultiChain] Hub portfolio fetch failed (chainId ${resolvedHubChainId}):`, err);
+      return null;
+    }),
+    ...spokeEntries.map(({ chainId, provider: sp }) =>
+      getVaultPortfolio(sp, vault).catch((err) => {
+        console.warn(`[getVaultPortfolioMultiChain] Spoke portfolio fetch failed (chainId ${chainId}):`, err);
+        return null;
+      }),
+    ),
+  ]);
+
+  // Step 4: build ChainPortfolio array (skip failed chains)
+  const chains: ChainPortfolio[] = [];
+
+  if (hubPortfolio) {
+    chains.push({ chainId: resolvedHubChainId, vault, role: "hub", portfolio: hubPortfolio });
+  }
+
+  for (let i = 0; i < spokeEntries.length; i++) {
+    const spokePortfolio = spokePortfolios[i];
+    if (spokePortfolio) {
+      chains.push({
+        chainId: spokeEntries[i].chainId,
+        vault,
+        role: "spoke",
+        portfolio: spokePortfolio,
+      });
+    }
+  }
+
+  // Step 5: aggregate totals
+  let totalLiquidValue = 0n;
+  let totalDeployedValue = 0n;
+  let totalLockedValue = 0n;
+  const allSubVaultPositions: Array<SubVaultPosition & { chainId: number }> = [];
+
+  for (const chain of chains) {
+    const p = chain.portfolio;
+    const deployedValue = p.subVaultPositions.reduce((sum, pos) => sum + pos.underlyingValue, 0n);
+    totalDeployedValue += deployedValue;
+    totalLiquidValue += p.totalValue > deployedValue ? p.totalValue - deployedValue : 0n;
+    totalLockedValue += p.lockedAssets;
+    for (const pos of p.subVaultPositions) {
+      allSubVaultPositions.push({ ...pos, chainId: chain.chainId });
+    }
+  }
+
+  return {
+    hubChainId: resolvedHubChainId,
+    chains,
+    totalLiquidValue,
+    totalDeployedValue,
+    totalLockedValue,
+    allSubVaultPositions,
   };
 }

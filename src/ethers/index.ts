@@ -32,6 +32,8 @@ export type {
   SubVaultInfo,
   ERC7540RequestStatus,
   VaultPortfolio,
+  ChainPortfolio,
+  MultiChainPortfolio,
 } from "./types";
 export { ActionType } from "./types";
 
@@ -195,6 +197,7 @@ export {
   previewSubVaultDeposit,
   previewSubVaultRedeem,
   getVaultPortfolio,
+  getVaultPortfolioMultiChain,
 } from "./curatorSubVaults";
 
 // --- Topology ---
