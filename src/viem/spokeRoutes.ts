@@ -165,52 +165,31 @@ export interface InboundRouteWithBalance extends InboundRoute {
 }
 
 /**
- * Find all valid OFT inbound routes for a vault.
- *
- * Only returns routes for chains where the vault has a registered spoke —
- * this is required so the composer can send shares back to the user's chain.
- * The hub chain is always included as a 'direct' deposit option.
- *
- * Routes that revert on quoteSend() (no liquidity, no peer) are excluded.
- *
- * @param hubChainId   Chain ID of the vault hub (e.g. 8453 for Base)
- * @param vault        Vault address (to resolve registered spoke chains)
- * @param vaultAsset   vault.asset() address on the hub chain
- * @param userAddress  User address (used as receiver for fee quote)
- * @returns            Array of InboundRoute objects; hub direct route is first (if present)
+ * Core logic: resolve inbound routes for a single vault asset.
+ * Pre-fetched shared state (client, topology, asyncMode) is passed in to avoid
+ * redundant RPC calls when iterating multiple assets.
  */
-export async function getInboundRoutes(
+async function _getRoutesForAsset(
   hubChainId: number,
+  hubEid: number,
   vault: Address,
-  vaultAsset: Address,
+  singleAsset: Address,
   userAddress: Address,
+  hubClient: ReturnType<typeof createChainClient>,
+  registeredSpokes: Set<number>,
+  asyncMode: boolean,
 ): Promise<InboundRoute[]> {
-  const hubEid = CHAIN_ID_TO_EID[hubChainId]
-  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`)
-
-  // Fetch vault topology to get registered spoke chains
-  const hubClient = createChainClient(hubChainId)
-  if (!hubClient) throw new MoreVaultsError(`No public RPC for hub chainId ${hubChainId}`)
-  const topology = await getVaultTopology(hubClient, vault)
-  const registeredSpokes = new Set(topology.spokeChainIds)
-
   const results: InboundRoute[] = []
+  const asset = getAddress(singleAsset)
 
+  // ── OFT cross-chain routes (spoke → hub) ──────────────────
   for (const [symbol, chainMap] of Object.entries(OFT_ROUTES)) {
     const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
     if (!hubEntry) continue
+    if (getAddress(hubEntry.token) !== asset) continue
 
-    // Does this OFT deliver the right asset to the hub?
-    if (getAddress(hubEntry.token) !== getAddress(vaultAsset)) continue
-
-    // oftCmd for OFT compose deposits: always '0x' (TAXI mode = immediate delivery with composeMsg).
-    // Stargate V2 semantics: '0x' = TAXI (supports composeMsg), '0x01' = BUS (no composeMsg).
-    // depositFromSpoke internally uses resolveOftCmd() which returns '0x' — match that here.
     const oftCmd: `0x${string}` = '0x'
-
-    // Only check chains where the vault has a registered spoke
-    // (composer needs to send shares back — requires a spoke vault on that chain)
-    const spokesToCheck = Object.keys(chainMap)
+    const spokesToCheck = Object.keys(chainMap as Record<string, unknown>)
       .map(Number)
       .filter(id => id !== hubChainId && registeredSpokes.has(id))
 
@@ -218,11 +197,9 @@ export async function getInboundRoutes(
       spokesToCheck.map(async (spokeChainId) => {
         const spokeEntry = (chainMap as Record<number, { oft: string; token: string }>)[spokeChainId]
         if (!spokeEntry) return
-
         const client = createChainClient(spokeChainId)
         if (!client) return
 
-        // Validate route via quoteSend — if it reverts, skip
         try {
           const receiverBytes32 = `0x${getAddress(userAddress).slice(2).padStart(64, '0')}` as `0x${string}`
           const spokeTokenAddr = getAddress(spokeEntry.token) as Address
@@ -243,7 +220,6 @@ export async function getInboundRoutes(
             }),
             readTokenSymbol(client, spokeTokenAddr, symbol),
           ])
-
           results.push({
             symbol,
             spokeChainId,
@@ -256,32 +232,26 @@ export async function getInboundRoutes(
             lzFeeEstimate:    fee.nativeFee,
             nativeSymbol:     NATIVE_SYMBOL[spokeChainId] ?? 'ETH',
           })
-        } catch {
-          // Route not available — skip silently
-        }
+        } catch { /* route not available — skip */ }
       })
     )
   }
 
-  // Add the hub chain itself as a deposit option.
-  // For async vaults the vault uses depositAsync which requires a LZ fee even on the hub chain.
-  const [asyncMode, ...hubOftEntries] = await Promise.all([
-    isAsyncMode(hubClient, vault),
-    ...Object.entries(OFT_ROUTES).map(async ([symbol, chainMap]) => {
+  // ── Hub direct route ──────────────────────────────────────
+  const hubOftEntry = Object.entries(OFT_ROUTES)
+    .map(([symbol, chainMap]) => {
       const hubEntry = (chainMap as Record<number, { oft: string; token: string }>)[hubChainId]
-      if (!hubEntry || getAddress(hubEntry.token) !== getAddress(vaultAsset)) return null
+      if (!hubEntry || getAddress(hubEntry.token) !== asset) return null
       return { symbol, hubEntry }
-    }),
-  ])
-
-  const hubOftEntry = hubOftEntries.find((e) => e !== null) ?? null
+    })
+    .find(e => e !== null) ?? null
 
   if (hubOftEntry) {
     const { symbol, hubEntry } = hubOftEntry
     const hubTokenAddr = getAddress(hubEntry.token) as Address
     const [sourceTokenSymbol, lzFeeEstimate] = await Promise.all([
-      readTokenSymbol(hubClient, hubTokenAddr, symbol),
-      asyncMode ? quoteLzFee(hubClient, vault) : Promise.resolve(0n),
+      readTokenSymbol(hubClient!, hubTokenAddr, symbol),
+      asyncMode ? quoteLzFee(hubClient!, vault) : Promise.resolve(0n),
     ])
     results.unshift({
       symbol,
@@ -296,13 +266,11 @@ export async function getInboundRoutes(
       nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
     })
   } else {
-    // No OFT route for the vault asset on the hub chain — still add a direct deposit route.
-    // This covers local (single-chain) vaults and any hub-chain token not in OFT_ROUTES.
-    // Users just need to approve the token and call deposit() directly, no LZ fee required.
-    const hubTokenAddr = getAddress(vaultAsset)
+    // No OFT route — direct deposit with the token as-is (local vaults, non-OFT tokens)
+    const hubTokenAddr = asset
     const [sourceTokenSymbol, lzFeeEstimate] = await Promise.all([
-      readTokenSymbol(hubClient, hubTokenAddr, 'UNKNOWN'),
-      asyncMode ? quoteLzFee(hubClient, vault) : Promise.resolve(0n),
+      readTokenSymbol(hubClient!, hubTokenAddr, 'UNKNOWN'),
+      asyncMode ? quoteLzFee(hubClient!, vault) : Promise.resolve(0n),
     ])
     results.unshift({
       symbol:           sourceTokenSymbol,
@@ -319,6 +287,67 @@ export async function getInboundRoutes(
   }
 
   return results
+}
+
+/**
+ * Find all valid inbound deposit routes for a vault.
+ *
+ * Accepts a single asset address **or an array** of depositable asset addresses.
+ * When an array is passed (multi-asset vaults), routes for each asset are fetched
+ * in parallel and merged — topology and async-mode are fetched only once.
+ *
+ * The hub chain is always included as a 'direct' (or 'direct-async') option for
+ * every depositable asset, even if the token is not in OFT_ROUTES.
+ *
+ * Routes that revert on quoteSend() (no liquidity, no peer) are excluded silently.
+ *
+ * @param hubChainId   Chain ID of the vault hub (e.g. 747 for Flow EVM)
+ * @param vault        Vault address
+ * @param vaultAsset   Single asset address OR array of depositable asset addresses
+ * @param userAddress  User address (used as receiver for fee quotes)
+ * @returns            Array of InboundRoute objects; hub direct route(s) are first
+ */
+export async function getInboundRoutes(
+  hubChainId: number,
+  vault: Address,
+  vaultAsset: Address | Address[],
+  userAddress: Address,
+): Promise<InboundRoute[]> {
+  const hubEid = CHAIN_ID_TO_EID[hubChainId]
+  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`)
+
+  const hubClient = createChainClient(hubChainId)
+  if (!hubClient) throw new MoreVaultsError(`No public RPC for hub chainId ${hubChainId}`)
+
+  // Fetch topology and async mode once, shared across all assets
+  const [topology, asyncMode] = await Promise.all([
+    getVaultTopology(hubClient, vault),
+    isAsyncMode(hubClient, vault),
+  ])
+  const registeredSpokes = new Set<number>(topology.spokeChainIds)
+
+  const assets = Array.isArray(vaultAsset) ? vaultAsset : [vaultAsset]
+
+  // Fetch routes for each asset in parallel, then merge and dedup by (spokeChainId + spokeToken)
+  const perAsset = await Promise.all(
+    assets.map(asset =>
+      _getRoutesForAsset(hubChainId, hubEid, vault, asset, userAddress, hubClient, registeredSpokes, asyncMode)
+    )
+  )
+
+  const seen = new Set<string>()
+  const merged: InboundRoute[] = []
+  for (const routes of perAsset) {
+    for (const r of routes) {
+      const key = `${r.spokeChainId}:${r.spokeToken}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        merged.push(r)
+      }
+    }
+  }
+
+  return merged
 }
 
 /**
