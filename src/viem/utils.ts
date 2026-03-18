@@ -8,6 +8,7 @@ import {
 } from 'viem'
 import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
+import { MoreVaultsError, CCManagerNotConfiguredError, AsyncRequestTimeoutError } from './errors.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TX receipt helper with retry — public RPCs can be slow, especially on Ethereum mainnet.
@@ -378,12 +379,26 @@ export async function quoteLzFee(
   vault: Address,
   extraOptions: `0x${string}` = '0x',
 ): Promise<bigint> {
-  return publicClient.readContract({
-    address: getAddress(vault),
-    abi: BRIDGE_ABI,
-    functionName: 'quoteAccountingFee',
-    args: [extraOptions],
-  })
+  try {
+    return await publicClient.readContract({
+      address: getAddress(vault),
+      abi: BRIDGE_ABI,
+      functionName: 'quoteAccountingFee',
+      args: [extraOptions],
+    })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (
+      msg.includes('CCManager') ||
+      msg.includes('CrossChainAccountingManager') ||
+      msg.includes('not configured') ||
+      msg.includes('zeroAddress') ||
+      msg.includes('address(0)')
+    ) {
+      throw new CCManagerNotConfiguredError(getAddress(vault))
+    }
+    throw e
+  }
 }
 
 /**
@@ -405,19 +420,29 @@ export async function isAsyncMode(
   const v = getAddress(vault)
 
   // A vault is async if it's a hub AND oracle accounting is OFF
-  const isHub = await publicClient.readContract({
-    address: v,
-    abi: CONFIG_ABI,
-    functionName: 'isHub',
-  })
+  let isHub: boolean
+  try {
+    isHub = await publicClient.readContract({
+      address: v,
+      abi: CONFIG_ABI,
+      functionName: 'isHub',
+    })
+  } catch {
+    return false
+  }
 
   if (!isHub) return false
 
-  const oraclesEnabled = await publicClient.readContract({
-    address: v,
-    abi: BRIDGE_ABI,
-    functionName: 'oraclesCrossChainAccounting',
-  })
+  let oraclesEnabled: boolean
+  try {
+    oraclesEnabled = await publicClient.readContract({
+      address: v,
+      abi: BRIDGE_ABI,
+      functionName: 'oraclesCrossChainAccounting',
+    })
+  } catch {
+    return false
+  }
 
   return !oraclesEnabled
 }
@@ -438,25 +463,31 @@ export async function getAsyncRequestStatus(
   vault: Address,
   guid: `0x${string}`,
 ): Promise<{ fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }> {
-  const info = (await publicClient.readContract({
-    address: getAddress(vault),
-    abi: BRIDGE_ABI,
-    functionName: 'getRequestInfo',
-    args: [guid],
-  })) as unknown as CrossChainRequestInfo
+  let info: CrossChainRequestInfo
+  let finalizationResult: unknown
+  try {
+    info = (await publicClient.readContract({
+      address: getAddress(vault),
+      abi: BRIDGE_ABI,
+      functionName: 'getRequestInfo',
+      args: [guid],
+    })) as unknown as CrossChainRequestInfo
 
-  const finalizationResult = await publicClient.readContract({
-    address: getAddress(vault),
-    abi: BRIDGE_ABI,
-    functionName: 'getFinalizationResult',
-    args: [guid],
-  })
+    finalizationResult = await publicClient.readContract({
+      address: getAddress(vault),
+      abi: BRIDGE_ABI,
+      functionName: 'getFinalizationResult',
+      args: [guid],
+    })
+  } catch {
+    throw new MoreVaultsError('Failed to read async request status')
+  }
 
   return {
     fulfilled: info.fulfilled,
     finalized: info.finalized,
     refunded: info.refunded,
-    result: finalizationResult,
+    result: finalizationResult as bigint,
   }
 }
 
@@ -517,10 +548,7 @@ export async function waitForAsyncRequest(
     await new Promise(r => setTimeout(r, pollInterval))
   }
 
-  throw new Error(
-    `[MoreVaults] Async request ${guid} did not finalize within ${timeout / 1000}s. ` +
-    `The request may still complete — check https://layerzeroscan.com/tx/${guid}`,
-  )
+  throw new AsyncRequestTimeoutError(guid)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

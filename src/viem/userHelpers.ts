@@ -6,6 +6,7 @@ import type { VaultStatus } from './utils'
 import { discoverVaultTopology, OMNI_FACTORY_ADDRESS } from './topology'
 import { createChainClient } from './spokeRoutes'
 import { CHAIN_ID_TO_EID } from './chains'
+import { MoreVaultsError } from './errors.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -49,12 +50,23 @@ export async function getUserPosition(
       { address: v, abi: METADATA_ABI, functionName: 'decimals' },
       { address: v, abi: VAULT_ABI, functionName: 'getWithdrawalRequest', args: [u] },
     ],
-    allowFailure: false,
+    allowFailure: true,
   })
   const block = await publicClient.getBlock()
-  const shares = sharesResult
-  const decimals = decimalsResult
-  const withdrawalRequest = withdrawalRequestResult
+
+  if (
+    sharesResult.status === 'failure' &&
+    decimalsResult.status === 'failure' &&
+    withdrawalRequestResult.status === 'failure'
+  ) {
+    throw new MoreVaultsError('Failed to read user position')
+  }
+
+  const shares = sharesResult.status === 'success' ? (sharesResult.result as bigint) : 0n
+  const decimals = decimalsResult.status === 'success' ? (decimalsResult.result as number) : 18
+  const withdrawalRequest = withdrawalRequestResult.status === 'success'
+    ? withdrawalRequestResult.result
+    : [0n, 0n]
 
   const [withdrawShares, timelockEndsAt] = withdrawalRequest as unknown as [bigint, bigint]
 
@@ -102,12 +114,25 @@ export async function previewDeposit(
   vault: Address,
   assets: bigint,
 ): Promise<bigint> {
-  return publicClient.readContract({
-    address: getAddress(vault),
-    abi: VAULT_ABI,
-    functionName: 'previewDeposit',
-    args: [assets],
-  })
+  try {
+    return await publicClient.readContract({
+      address: getAddress(vault),
+      abi: VAULT_ABI,
+      functionName: 'previewDeposit',
+      args: [assets],
+    })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (
+      msg.includes('revert') ||
+      msg.includes('NotAnERC4626') ||
+      msg.includes('async') ||
+      msg.includes('previewDeposit')
+    ) {
+      throw new MoreVaultsError('Vault does not support sync preview. It may be in async mode.')
+    }
+    throw e
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,12 +150,25 @@ export async function previewRedeem(
   vault: Address,
   shares: bigint,
 ): Promise<bigint> {
-  return publicClient.readContract({
-    address: getAddress(vault),
-    abi: VAULT_ABI,
-    functionName: 'previewRedeem',
-    args: [shares],
-  })
+  try {
+    return await publicClient.readContract({
+      address: getAddress(vault),
+      abi: VAULT_ABI,
+      functionName: 'previewRedeem',
+      args: [shares],
+    })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (
+      msg.includes('revert') ||
+      msg.includes('NotAnERC4626') ||
+      msg.includes('async') ||
+      msg.includes('previewRedeem')
+    ) {
+      throw new MoreVaultsError('Vault does not support sync preview. It may be in async mode.')
+    }
+    throw e
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -246,11 +284,21 @@ export async function getVaultMetadata(
       { address: v, abi: METADATA_ABI, functionName: 'decimals' },
       { address: v, abi: VAULT_ABI,    functionName: 'asset' },
     ] as const,
-    allowFailure: false,
+    allowFailure: true,
   })
 
-  const [name, symbol, decimals, underlying] = b1
-  const underlyingAddr = getAddress(underlying as Address)
+  const assetResult   = b1[3]
+  const decimalsResult1 = b1[2]
+
+  if (assetResult.status === 'failure' || decimalsResult1.status === 'failure') {
+    throw new MoreVaultsError('Failed to read vault metadata')
+  }
+
+  const name     = b1[0].status === 'success' ? (b1[0].result as string)  : ''
+  const symbol   = b1[1].status === 'success' ? (b1[1].result as string)  : ''
+  const decimals = b1[2].result as number
+  const underlying = b1[3].result as Address
+  const underlyingAddr = getAddress(underlying)
 
   // Batch 2: underlying symbol + decimals — 1 eth_call via multicall
   const b2 = await publicClient.multicall({
@@ -258,10 +306,11 @@ export async function getVaultMetadata(
       { address: underlyingAddr, abi: METADATA_ABI, functionName: 'symbol' },
       { address: underlyingAddr, abi: METADATA_ABI, functionName: 'decimals' },
     ] as const,
-    allowFailure: false,
+    allowFailure: true,
   })
 
-  const [underlyingSymbol, underlyingDecimals] = b2
+  const underlyingSymbol   = b2[0].status === 'success' ? (b2[0].result as string)  : ''
+  const underlyingDecimals = b2[1].status === 'success' ? (b2[1].result as number)  : 18
 
   return {
     name,
@@ -300,20 +349,28 @@ export async function getAsyncRequestStatusLabel(
 ): Promise<AsyncRequestStatusInfo> {
   const v = getAddress(vault)
 
-  const [info, finalizationResult] = await Promise.all([
-    publicClient.readContract({
-      address: v,
-      abi: BRIDGE_ABI,
-      functionName: 'getRequestInfo',
-      args: [guid],
-    }) as Promise<CrossChainRequestInfo>,
-    publicClient.readContract({
-      address: v,
-      abi: BRIDGE_ABI,
-      functionName: 'getFinalizationResult',
-      args: [guid],
-    }),
-  ])
+  let info: CrossChainRequestInfo
+  let finalizationResult: bigint
+  try {
+    const [rawInfo, rawResult] = await Promise.all([
+      publicClient.readContract({
+        address: v,
+        abi: BRIDGE_ABI,
+        functionName: 'getRequestInfo',
+        args: [guid],
+      }) as Promise<CrossChainRequestInfo>,
+      publicClient.readContract({
+        address: v,
+        abi: BRIDGE_ABI,
+        functionName: 'getFinalizationResult',
+        args: [guid],
+      }),
+    ])
+    info = rawInfo
+    finalizationResult = rawResult as bigint
+  } catch {
+    throw new MoreVaultsError('Failed to read async request status. Vault may not support cross-chain flows.')
+  }
 
   if (info.refunded) {
     return {
@@ -371,14 +428,16 @@ export async function getUserBalances(
   const u = getAddress(user)
 
   // Batch 1: get underlying address, share balance, decimals
-  const [shareBalance, , underlying] = await publicClient.multicall({
+  const b1Results = await publicClient.multicall({
     contracts: [
       { address: v, abi: VAULT_ABI,   functionName: 'balanceOf', args: [u] },
       { address: v, abi: METADATA_ABI, functionName: 'decimals' },
       { address: v, abi: VAULT_ABI,   functionName: 'asset' },
     ],
-    allowFailure: false,
+    allowFailure: true,
   })
+  const shareBalance = b1Results[0].status === 'success' ? (b1Results[0].result as bigint) : 0n
+  const underlying   = b1Results[2].status === 'success' ? (b1Results[2].result as Address) : '0x0000000000000000000000000000000000000000' as Address
 
   const underlyingAddr = getAddress(underlying)
 
@@ -436,15 +495,19 @@ export async function getMaxWithdrawable(
   const u = getAddress(user)
 
   // Batch 1: isHub, oraclesCrossChainAccounting, user share balance, underlying address
-  const [isHub, oraclesEnabled, userShares, underlying] = await publicClient.multicall({
+  const b1Mw = await publicClient.multicall({
     contracts: [
       { address: v, abi: CONFIG_ABI, functionName: 'isHub' },
       { address: v, abi: BRIDGE_ABI, functionName: 'oraclesCrossChainAccounting' },
       { address: v, abi: VAULT_ABI,  functionName: 'balanceOf', args: [u] },
       { address: v, abi: VAULT_ABI,  functionName: 'asset' },
     ],
-    allowFailure: false,
+    allowFailure: true,
   })
+  const isHub        = b1Mw[0].status === 'success' ? (b1Mw[0].result as boolean) : false
+  const oraclesEnabled = b1Mw[1].status === 'success' ? (b1Mw[1].result as boolean) : false
+  const userShares   = b1Mw[2].status === 'success' ? (b1Mw[2].result as bigint)  : 0n
+  const underlying   = b1Mw[3].status === 'success' ? (b1Mw[3].result as Address) : '0x0000000000000000000000000000000000000000' as Address
 
   if (userShares === 0n) {
     return { shares: 0n, assets: 0n }
@@ -587,17 +650,20 @@ export async function getUserPositionMultiChain(
   // Step 1: discover topology
   const topo = await discoverVaultTopology(vault)
   const hubClient = createChainClient(topo.hubChainId)
-  if (!hubClient) throw new Error(`No public RPC for hub chainId ${topo.hubChainId}`)
+  if (!hubClient) throw new MoreVaultsError(`No RPC available for hub chain ${topo.hubChainId}`)
 
   // Step 2: read hub data (shares, decimals, withdrawal request)
-  const [hubShares, decimals, withdrawalRequest] = await (hubClient as PublicClient).multicall({
+  const hubMcResults = await (hubClient as PublicClient).multicall({
     contracts: [
       { address: v, abi: VAULT_ABI, functionName: 'balanceOf', args: [u] },
       { address: v, abi: METADATA_ABI, functionName: 'decimals' },
       { address: v, abi: VAULT_ABI, functionName: 'getWithdrawalRequest', args: [u] },
     ],
-    allowFailure: false,
+    allowFailure: true,
   })
+  const hubShares       = hubMcResults[0].status === 'success' ? (hubMcResults[0].result as bigint) : 0n
+  const decimals        = hubMcResults[1].status === 'success' ? (hubMcResults[1].result as number) : 18
+  const withdrawalRequest = hubMcResults[2].status === 'success' ? hubMcResults[2].result : [0n, 0n]
 
   const [withdrawShares, timelockEndsAt] = withdrawalRequest as unknown as [bigint, bigint]
 

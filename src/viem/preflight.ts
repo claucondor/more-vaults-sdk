@@ -8,7 +8,17 @@
 
 import { type Address, type PublicClient, getAddress, zeroAddress } from 'viem'
 import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI, OFT_ABI } from './abis'
-import { InsufficientLiquidityError } from './errors'
+import {
+  InsufficientLiquidityError,
+  VaultPausedError,
+  CCManagerNotConfiguredError,
+  EscrowNotConfiguredError,
+  NotHubVaultError,
+  CapacityFullError,
+  InsufficientBalanceError,
+  UnsupportedChainError,
+  MoreVaultsError,
+} from './errors'
 import { quoteComposeFee } from './crossChainFlows'
 import { createChainClient } from './spokeRoutes'
 import { EID_TO_CHAIN_ID } from './chains'
@@ -70,33 +80,25 @@ export async function preflightAsync(
     ])
 
   if (ccManager === zeroAddress) {
-    throw new Error(
-      `[MoreVaults] CCManager not configured on vault ${vault}. Call setCrossChainAccountingManager(ccManagerAddress) as vault owner first.`,
-    )
+    throw new CCManagerNotConfiguredError(vault)
   }
 
   if (registeredEscrow === zeroAddress) {
-    throw new Error(
-      `[MoreVaults] Escrow not configured for vault ${vault}. The registry must have an escrow set for this vault.`,
-    )
+    throw new EscrowNotConfiguredError(vault)
   }
 
   if (!isHub) {
-    throw new Error(
-      `[MoreVaults] Vault ${vault} is not a hub vault. Async flows (D4/D5/R5) only work on hub vaults.`,
-    )
+    throw new NotHubVaultError(vault)
   }
 
   if (oraclesEnabled) {
-    throw new Error(
+    throw new MoreVaultsError(
       `[MoreVaults] Vault ${vault} has oracle-based cross-chain accounting enabled. Use depositSimple/depositCrossChainOracleOn instead of async flows.`,
     )
   }
 
   if (isPaused) {
-    throw new Error(
-      `[MoreVaults] Vault ${vault} is paused. Cannot perform any actions.`,
-    )
+    throw new VaultPausedError(vault)
   }
 }
 
@@ -215,17 +217,13 @@ export async function preflightSync(
   ])
 
   if (isPaused) {
-    throw new Error(
-      `[MoreVaults] Vault ${vault} is paused. Cannot perform any actions.`,
-    )
+    throw new VaultPausedError(vault)
   }
 
   // null means maxDeposit reverted → whitelist vault — skip capacity check
   // (the user may still be whitelisted; canDeposit will do user-specific check)
   if (depositCapResult !== null && depositCapResult === 0n) {
-    throw new Error(
-      `[MoreVaults] Vault ${vault} has reached deposit capacity. No more deposits accepted.`,
-    )
+    throw new CapacityFullError(vault)
   }
 }
 
@@ -287,22 +285,13 @@ export async function preflightSpokeDeposit(
 
   // 1. Check token balance
   if (spokeTokenBalance < amount) {
-    throw new Error(
-      `[MoreVaults] Insufficient token balance on spoke chain.\n` +
-      `  Need:  ${amount}\n` +
-      `  Have:  ${spokeTokenBalance}\n` +
-      `  Token: ${spokeToken}`,
-    )
+    throw new InsufficientBalanceError(String(spokeToken), spokeTokenBalance as bigint, amount)
   }
 
   // 2. Check native gas for TX1 (lzFee + gas buffer)
   const gasBuffer = 500_000_000_000_000n // 0.0005 ETH for gas
   if (spokeNativeBalance < lzFee + gasBuffer) {
-    throw new Error(
-      `[MoreVaults] Insufficient native gas on spoke chain for TX1.\n` +
-      `  Need:  ~${lzFee + gasBuffer} wei (LZ fee + gas)\n` +
-      `  Have:  ${spokeNativeBalance} wei`,
-    )
+    throw new InsufficientBalanceError('native gas (spoke TX1)', spokeNativeBalance, lzFee + gasBuffer)
   }
 
   // 3. For Stargate OFTs: check ETH on hub for TX2 (compose retry)
@@ -324,14 +313,7 @@ export async function preflightSpokeDeposit(
       const totalNeeded = estimatedComposeFee + hubGasBuffer
 
       if (hubNativeBalance < totalNeeded) {
-        throw new Error(
-          `[MoreVaults] Insufficient ETH on hub chain for TX2 (compose retry).\n` +
-          `  This is a Stargate 2-TX flow — TX2 requires ETH on the hub chain.\n` +
-          `  Need:  ~${totalNeeded} wei (compose fee ${estimatedComposeFee} + gas)\n` +
-          `  Have:  ${hubNativeBalance} wei\n` +
-          `  Short: ${totalNeeded - hubNativeBalance} wei\n` +
-          `  Send ETH to ${userAddress} on chainId ${hubChainId} before depositing.`,
-        )
+        throw new InsufficientBalanceError('native gas (hub TX2)', hubNativeBalance, totalNeeded)
       }
     }
   }
@@ -385,8 +367,8 @@ export async function preflightSpokeRedeem(
 }> {
   const spokeClient = createChainClient(route.spokeChainId)
   const hubClient = createChainClient(route.hubChainId)
-  if (!spokeClient) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`)
-  if (!hubClient) throw new Error(`No public RPC for hub chainId ${route.hubChainId}`)
+  if (!spokeClient) throw new UnsupportedChainError(route.spokeChainId)
+  if (!hubClient) throw new UnsupportedChainError(route.hubChainId)
 
   const user = getAddress(userAddress)
   const vault = getAddress(route.hubAsset) // vault address is same on all chains
@@ -405,22 +387,13 @@ export async function preflightSpokeRedeem(
 
   // 1. Check shares
   if (sharesOnSpoke < shares) {
-    throw new Error(
-      `[MoreVaults] Insufficient shares on spoke chain.\n` +
-      `  Need:  ${shares}\n` +
-      `  Have:  ${sharesOnSpoke}\n` +
-      `  Token: ${route.spokeShareOft}`,
-    )
+    throw new InsufficientBalanceError(route.spokeShareOft, sharesOnSpoke as bigint, shares)
   }
 
   // 2. Check spoke gas for TX1
   const spokeGasBuffer = 500_000_000_000_000n // 0.0005 ETH
   if (spokeNativeBalance < shareBridgeFee + spokeGasBuffer) {
-    throw new Error(
-      `[MoreVaults] Insufficient native gas on spoke for TX1 (share bridge).\n` +
-      `  Need:  ~${shareBridgeFee + spokeGasBuffer} wei (LZ fee + gas)\n` +
-      `  Have:  ${spokeNativeBalance} wei`,
-    )
+    throw new InsufficientBalanceError('native gas (spoke TX1)', spokeNativeBalance, shareBridgeFee + spokeGasBuffer)
   }
 
   // 3. Estimate asset bridge fee (TX3) and check hub gas
@@ -471,13 +444,7 @@ export async function preflightSpokeRedeem(
   const totalHubNeeded = estimatedAssetBridgeFee + hubGasBuffer
 
   if (hubNativeBalance < totalHubNeeded) {
-    throw new Error(
-      `[MoreVaults] Insufficient ETH on hub chain for TX2 (redeem) + TX3 (asset bridge).\n` +
-      `  Need:  ~${totalHubNeeded} wei (LZ fee ${estimatedAssetBridgeFee} + gas)\n` +
-      `  Have:  ${hubNativeBalance} wei\n` +
-      `  Short: ${totalHubNeeded - hubNativeBalance} wei\n` +
-      `  Send ETH to ${userAddress} on chainId ${route.hubChainId} before redeeming.`,
-    )
+    throw new InsufficientBalanceError('native gas (hub TX2+TX3)', hubNativeBalance, totalHubNeeded)
   }
 
   return {

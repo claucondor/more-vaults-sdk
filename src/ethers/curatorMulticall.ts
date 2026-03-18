@@ -18,6 +18,8 @@ import {
   TIMELOCK_CONFIG_ABI,
 } from "./abis";
 import type { CuratorAction, SubmitActionsResult } from "./types";
+import { InvalidInputError } from "./errors";
+import { parseContractError } from "./errorParser";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Encoding helpers
@@ -237,10 +239,17 @@ export async function submitActions(
   vault: string,
   actions: string[]
 ): Promise<SubmitActionsResult> {
+  if (actions.length === 0) throw new InvalidInputError('actions array is empty')
+
   const multicallContract = new Contract(vault, MULTICALL_ABI, signer);
 
-  const tx = await multicallContract.submitActions(actions);
-  const receipt: ContractTransactionReceipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await multicallContract.submitActions(actions);
+  } catch (err) {
+    parseContractError(err, vault)
+  }
+  const receipt: ContractTransactionReceipt = await tx!.wait();
 
   // Read the nonce that was assigned: the contract increments actionNonce after storing,
   // so getCurrentNonce now returns (assignedNonce + 1). Subtract 1 to recover it.
@@ -268,8 +277,13 @@ export async function executeActions(
 ): Promise<ContractTransactionReceipt> {
   const multicallContract = new Contract(vault, MULTICALL_ABI, signer);
 
-  const tx = await multicallContract.executeActions(nonce);
-  return tx.wait() as Promise<ContractTransactionReceipt>;
+  let tx: any
+  try {
+    tx = await multicallContract.executeActions(nonce);
+  } catch (err) {
+    parseContractError(err, vault)
+  }
+  return tx!.wait() as Promise<ContractTransactionReceipt>;
 }
 
 /**
@@ -288,8 +302,15 @@ export async function vetoActions(
   vault: string,
   nonces: bigint[]
 ): Promise<ContractTransactionReceipt> {
+  if (nonces.length === 0) throw new InvalidInputError('nonces array is empty')
+
   const multicallContract = new Contract(vault, MULTICALL_ABI, signer);
 
-  const tx = await multicallContract.vetoActions(nonces);
-  return tx.wait() as Promise<ContractTransactionReceipt>;
+  let tx: any
+  try {
+    tx = await multicallContract.vetoActions(nonces);
+  } catch (err) {
+    parseContractError(err, vault)
+  }
+  return tx!.wait() as Promise<ContractTransactionReceipt>;
 }

@@ -30,6 +30,8 @@ import type {
   CuratorAction,
   SubmitActionsResult,
 } from './types.js'
+import { InvalidInputError } from './errors.js'
+import { parseContractError } from './errorParser.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Encoding helpers
@@ -311,14 +313,20 @@ export async function submitActions(
   const account = walletClient.account!
   const v = getAddress(vault)
 
+  if (actions.length === 0) throw new InvalidInputError('actions array is empty')
+
   // Simulate first — catches permission errors and reverts before spending gas
-  await publicClient.simulateContract({
-    address: v,
-    abi: MULTICALL_ABI,
-    functionName: 'submitActions',
-    args: [actions],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: MULTICALL_ABI,
+      functionName: 'submitActions',
+      args: [actions],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -369,13 +377,17 @@ export async function executeActions(
   const v = getAddress(vault)
 
   // Simulate to surface reverts (NoSuchActions, ActionsStillPending, slippage)
-  await publicClient.simulateContract({
-    address: v,
-    abi: MULTICALL_ABI,
-    functionName: 'executeActions',
-    args: [nonce],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: MULTICALL_ABI,
+      functionName: 'executeActions',
+      args: [nonce],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -412,14 +424,20 @@ export async function vetoActions(
   const account = walletClient.account!
   const v = getAddress(vault)
 
+  if (nonces.length === 0) throw new InvalidInputError('nonces array is empty')
+
   // Simulate to catch NotGuardian, NoSuchActions, etc.
-  await publicClient.simulateContract({
-    address: v,
-    abi: MULTICALL_ABI,
-    functionName: 'vetoActions',
-    args: [nonces],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: MULTICALL_ABI,
+      functionName: 'vetoActions',
+      args: [nonces],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,

@@ -17,8 +17,9 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee, detectStargateOft } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
-import { EscrowNotConfiguredError } from './errors'
+import { EscrowNotConfiguredError, VaultPausedError, InvalidInputError } from './errors'
 import { validateWalletChain } from './chainValidation'
+import { parseContractError } from './errorParser'
 import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
 import { createChainClient } from './spokeRoutes'
 import { OMNI_FACTORY_ADDRESS } from './topology'
@@ -51,16 +52,24 @@ export async function redeemShares(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
-  const { result: assets } = await publicClient.simulateContract({
-    address: vault,
-    abi: VAULT_ABI,
-    functionName: 'redeem',
-    args: [shares, getAddress(receiver), getAddress(owner)],
-    account: account.address,
-  })
+  let assets: bigint
+  try {
+    const { result } = await publicClient.simulateContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'redeem',
+      args: [shares, getAddress(receiver), getAddress(owner)],
+      account: account.address,
+    })
+    assets = result
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -71,7 +80,7 @@ export async function redeemShares(
     chain: walletClient.chain,
   })
 
-  return { txHash, assets }
+  return { txHash, assets: assets! }
 }
 
 /**
@@ -102,16 +111,22 @@ export async function withdrawAssets(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  if (assets === 0n) throw new InvalidInputError('assets amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
-  const { result: sharesBurned } = await publicClient.simulateContract({
-    address: vault,
-    abi: VAULT_ABI,
-    functionName: 'withdraw',
-    args: [assets, getAddress(receiver), getAddress(owner)],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'withdraw',
+      args: [assets, getAddress(receiver), getAddress(owner)],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -154,16 +169,22 @@ export async function requestRedeem(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
-  await publicClient.simulateContract({
-    address: vault,
-    abi: VAULT_ABI,
-    functionName: 'requestRedeem',
-    args: [shares, getAddress(owner)],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'requestRedeem',
+      args: [shares, getAddress(owner)],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -242,6 +263,9 @@ export async function redeemAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   const escrow = addresses.escrow
     ? getAddress(addresses.escrow)
     : await publicClient.readContract({ address: vault, abi: CONFIG_ABI, functionName: 'getEscrow' })
@@ -266,26 +290,34 @@ export async function redeemAsync(
   ) as `0x${string}`
 
   // amountLimit MUST be 0 for REDEEM — see JSDoc above
-  const [{ result: guid }, gasEstimate] = await Promise.all([
-    publicClient.simulateContract({
-      address: vault,
-      abi: BRIDGE_ABI,
-      functionName: 'initVaultActionRequest',
-      args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
-      value: lzFee,
-      account: account.address,
-    }),
-    publicClient.estimateContractGas({
-      address: vault,
-      abi: BRIDGE_ABI,
-      functionName: 'initVaultActionRequest',
-      args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
-      value: lzFee,
-      account: account.address,
-    }),
-  ])
+  let guid: `0x${string}`
+  let gasEstimate: bigint
+  try {
+    const [{ result }, gas] = await Promise.all([
+      publicClient.simulateContract({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
+        value: lzFee,
+        account: account.address,
+      }),
+      publicClient.estimateContractGas({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
+        value: lzFee,
+        account: account.address,
+      }),
+    ])
+    guid = result as `0x${string}`
+    gasEstimate = gas
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
-  const gas = gasEstimate * 130n / 100n
+  const gas = gasEstimate! * 130n / 100n
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -298,7 +330,7 @@ export async function redeemAsync(
     gas,
   })
 
-  return { txHash, guid: guid as `0x${string}` }
+  return { txHash, guid: guid! }
 }
 
 /**
@@ -341,7 +373,7 @@ export async function smartRedeem(
   const status = await getVaultStatus(publicClient, vault)
 
   if (status.mode === 'paused') {
-    throw new Error(`[MoreVaults] Vault ${vault} is paused. Cannot redeem.`)
+    throw new VaultPausedError(vault)
   }
 
   if (status.recommendedDepositFlow === 'depositAsync') {
@@ -434,6 +466,8 @@ export async function bridgeSharesToHub(
   const account = walletClient.account!
   const oft = getAddress(shareOFT)
 
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   // Approve OFT for share transfer
   await ensureAllowance(walletClient, publicClient, oft, oft, shares)
 
@@ -452,6 +486,19 @@ export async function bridgeSharesToHub(
   const fee = {
     nativeFee: lzFee,
     lzTokenFee: 0n,
+  }
+
+  try {
+    await publicClient.simulateContract({
+      address: oft,
+      abi: OFT_ABI,
+      functionName: 'send',
+      args: [sendParam, fee, account.address],
+      value: lzFee,
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, oft, account.address)
   }
 
   const txHash = await walletClient.writeContract({
@@ -513,6 +560,8 @@ export async function bridgeAssetsToSpoke(
   const account = walletClient.account!
   const oft = getAddress(assetOFT)
 
+  if (amount === 0n) throw new InvalidInputError('amount must be greater than zero')
+
   // Read underlying token and approve if different from OFT
   const token = await publicClient.readContract({
     address: oft,
@@ -543,6 +592,19 @@ export async function bridgeAssetsToSpoke(
   const fee = {
     nativeFee: lzFee,
     lzTokenFee: 0n,
+  }
+
+  try {
+    await publicClient.simulateContract({
+      address: oft,
+      abi: OFT_ABI,
+      functionName: 'send',
+      args: [sendParam, fee, account.address],
+      value: lzFee,
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, oft, account.address)
   }
 
   const txHash = await walletClient.writeContract({

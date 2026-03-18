@@ -18,6 +18,7 @@ import type { Provider, Signer, ContractTransactionReceipt } from "ethers";
 import { BRIDGE_FACET_ABI, LZ_ADAPTER_ABI } from "./abis";
 import { OFT_ROUTES } from "./chains";
 import { getCuratorVaultStatus } from "./curatorStatus";
+import { parseContractError } from "./errorParser";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -172,11 +173,16 @@ export async function quoteCuratorBridgeFee(
   const bridgeSpecificParams = encodeBridgeParamsForQuote(params);
 
   const adapterContract = new Contract(lzAdapter, LZ_ADAPTER_ABI, provider);
-  const nativeFee = (await adapterContract.quoteBridgeFee.staticCall(
-    bridgeSpecificParams
-  )) as bigint;
+  let nativeFee: bigint
+  try {
+    nativeFee = (await adapterContract.quoteBridgeFee.staticCall(
+      bridgeSpecificParams
+    )) as bigint;
+  } catch (err) {
+    parseContractError(err, vault)
+  }
 
-  return nativeFee;
+  return nativeFee!;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -223,13 +229,18 @@ export async function executeCuratorBridge(
 
   // Step 4: Execute bridging
   const vaultContract = new Contract(vault, BRIDGE_FACET_ABI, signer);
-  const tx = await vaultContract.executeBridging(
-    getAddress(lzAdapter),
-    getAddress(token),
-    params.amount,
-    bridgeSpecificParams,
-    { value: fee }
-  );
+  let tx: any
+  try {
+    tx = await vaultContract.executeBridging(
+      getAddress(lzAdapter),
+      getAddress(token),
+      params.amount,
+      bridgeSpecificParams,
+      { value: fee }
+    );
+  } catch (err) {
+    parseContractError(err, vault)
+  }
 
-  return tx.wait() as Promise<ContractTransactionReceipt>;
+  return tx!.wait() as Promise<ContractTransactionReceipt>;
 }

@@ -88,3 +88,110 @@ export class WrongChainError extends MoreVaultsError {
     this.name = 'WrongChainError'
   }
 }
+
+export class NotCuratorError extends MoreVaultsError {
+  constructor(vault: string, caller: string) {
+    super(`[MoreVaults] Address ${caller} is not the curator of vault ${vault}.`)
+    this.name = 'NotCuratorError'
+  }
+}
+
+export class NotOwnerError extends MoreVaultsError {
+  constructor(vault: string, caller: string) {
+    super(`[MoreVaults] Address ${caller} is not the owner of vault ${vault}.`)
+    this.name = 'NotOwnerError'
+  }
+}
+
+export class NotGuardianError extends MoreVaultsError {
+  constructor(vault: string, caller: string) {
+    super(`[MoreVaults] Address ${caller} is not the guardian of vault ${vault}.`)
+    this.name = 'NotGuardianError'
+  }
+}
+
+export class InvalidInputError extends MoreVaultsError {
+  constructor(message: string) {
+    super(`[MoreVaults] Invalid input: ${message}`)
+    this.name = 'InvalidInputError'
+  }
+}
+
+export class ActionsStillPendingError extends MoreVaultsError {
+  nonce: bigint
+  constructor(vault: string, nonce: bigint) {
+    super(`[MoreVaults] Actions nonce ${nonce} on vault ${vault} are still pending (timelock not expired).`)
+    this.name = 'ActionsStillPendingError'
+    this.nonce = nonce
+  }
+}
+
+export class NoSuchActionsError extends MoreVaultsError {
+  nonce: bigint
+  constructor(vault: string, nonce: bigint) {
+    super(`[MoreVaults] No actions found for nonce ${nonce} on vault ${vault}.`)
+    this.name = 'NoSuchActionsError'
+    this.nonce = nonce
+  }
+}
+
+export class SlippageExceededError extends MoreVaultsError {
+  constructor(vault: string) {
+    super(`[MoreVaults] Slippage exceeded on vault ${vault}. Try increasing slippage tolerance or reducing amount.`)
+    this.name = 'SlippageExceededError'
+  }
+}
+
+export class UnsupportedAssetError extends MoreVaultsError {
+  asset: string
+  constructor(vault: string, asset: string) {
+    super(`[MoreVaults] Asset ${asset} is not supported by vault ${vault}.`)
+    this.name = 'UnsupportedAssetError'
+    this.asset = asset
+  }
+}
+
+export class ComposerNotConfiguredError extends MoreVaultsError {
+  constructor(vault: string) {
+    super(`[MoreVaults] Composer not configured for vault ${vault}. The vault must have a MoreVaultsComposer deployed.`)
+    this.name = 'ComposerNotConfiguredError'
+  }
+}
+
+export class UnsupportedChainError extends MoreVaultsError {
+  chainId: number
+  constructor(chainId: number) {
+    super(`[MoreVaults] Chain ${chainId} is not supported. No RPC configuration found.`)
+    this.name = 'UnsupportedChainError'
+    this.chainId = chainId
+  }
+}
+
+export class InsufficientBalanceError extends MoreVaultsError {
+  available: bigint
+  required: bigint
+  constructor(token: string, available: bigint, required: bigint) {
+    super(`[MoreVaults] Insufficient ${token} balance: have ${available}, need ${required}.`)
+    this.name = 'InsufficientBalanceError'
+    this.available = available
+    this.required = required
+  }
+}
+
+export class AsyncRequestTimeoutError extends MoreVaultsError {
+  guid: string
+  constructor(guid: string) {
+    super(`[MoreVaults] Async request ${guid} did not finalize within the timeout period.`)
+    this.name = 'AsyncRequestTimeoutError'
+    this.guid = guid
+  }
+}
+
+export class ComposeTimeoutError extends MoreVaultsError {
+  guid: string
+  constructor(guid: string) {
+    super(`[MoreVaults] Compose for GUID ${guid} was not delivered within the timeout period.`)
+    this.name = 'ComposeTimeoutError'
+    this.guid = guid
+  }
+}

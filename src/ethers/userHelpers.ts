@@ -12,6 +12,7 @@ import { getVaultStatus } from "./utils";
 import type { VaultStatus } from "./utils";
 import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
 import { discoverVaultTopology, OMNI_FACTORY_ADDRESS } from "./topology";
+import { MoreVaultsError } from "./errors";
 
 // Multicall3 — deployed at the same address on every EVM chain
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -540,7 +541,7 @@ export async function getUserPositionMultiChain(
   // Step 1: discover topology
   const topo = await discoverVaultTopology(vault);
   const hubProvider = createChainProvider(topo.hubChainId);
-  if (!hubProvider) throw new Error(`No public RPC for hub chainId ${topo.hubChainId}`);
+  if (!hubProvider) throw new MoreVaultsError(`No public RPC for hub chainId ${topo.hubChainId}`);
 
   // Step 2: read hub data (shares, decimals, withdrawal request)
   const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, hubProvider);

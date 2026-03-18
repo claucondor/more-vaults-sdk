@@ -18,6 +18,7 @@ import {
   VAULT_ANALYSIS_ABI,
   REGISTRY_ABI,
 } from "./abis";
+import { MoreVaultsError } from "./errors";
 import type {
   SubVaultPosition,
   SubVaultInfo,
@@ -334,7 +335,11 @@ export async function previewSubVaultDeposit(
   assets: bigint
 ): Promise<bigint> {
   const contract = new Contract(subVault, SUB_VAULT_ABI as unknown as string[], provider);
-  return (await contract.previewDeposit(assets)) as bigint;
+  try {
+    return (await contract.previewDeposit(assets)) as bigint;
+  } catch (err) {
+    throw new MoreVaultsError(`previewSubVaultDeposit failed for ${subVault}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,7 +358,11 @@ export async function previewSubVaultRedeem(
   shares: bigint
 ): Promise<bigint> {
   const contract = new Contract(subVault, SUB_VAULT_ABI as unknown as string[], provider);
-  return (await contract.previewRedeem(shares)) as bigint;
+  try {
+    return (await contract.previewRedeem(shares)) as bigint;
+  } catch (err) {
+    throw new MoreVaultsError(`previewSubVaultRedeem failed for ${subVault}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

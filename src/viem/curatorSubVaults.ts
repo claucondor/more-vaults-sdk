@@ -24,6 +24,7 @@ import {
   VAULT_ANALYSIS_ABI,
   REGISTRY_ABI,
 } from './abis.js'
+import { MoreVaultsError } from './errors.js'
 import type {
   SubVaultPosition,
   SubVaultInfo,
@@ -378,13 +379,17 @@ export async function previewSubVaultDeposit(
   subVault: Address,
   assets: bigint,
 ): Promise<bigint> {
-  const result = await publicClient.readContract({
-    address: getAddress(subVault),
-    abi: SUB_VAULT_ABI,
-    functionName: 'previewDeposit',
-    args: [assets],
-  })
-  return result as bigint
+  try {
+    const result = await publicClient.readContract({
+      address: getAddress(subVault),
+      abi: SUB_VAULT_ABI,
+      functionName: 'previewDeposit',
+      args: [assets],
+    })
+    return result as bigint
+  } catch {
+    throw new MoreVaultsError('Failed to preview sub-vault operation. The sub-vault may not support this.')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -405,13 +410,17 @@ export async function previewSubVaultRedeem(
   subVault: Address,
   shares: bigint,
 ): Promise<bigint> {
-  const result = await publicClient.readContract({
-    address: getAddress(subVault),
-    abi: SUB_VAULT_ABI,
-    functionName: 'previewRedeem',
-    args: [shares],
-  })
-  return result as bigint
+  try {
+    const result = await publicClient.readContract({
+      address: getAddress(subVault),
+      abi: SUB_VAULT_ABI,
+      functionName: 'previewRedeem',
+      args: [shares],
+    })
+    return result as bigint
+  } catch {
+    throw new MoreVaultsError('Failed to preview sub-vault operation. The sub-vault may not support this.')
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,6 +2,22 @@
 
 All notable changes to the MoreVaults SDK are documented in this file.
 
+## [1.1.0] - 2026-03-18
+
+### Added
+- **`getInboundRoutes` multi-asset support** — `vaultAsset` now accepts `Address | Address[]`. Multi-asset vaults get all routes in one call; topology and async-mode are fetched once and shared across all assets. Fully backward compatible.
+- **Direct hub route for non-OFT tokens** — local vaults and tokens not in `OFT_ROUTES` (e.g. WFLOW, ankrFLOWEVM on Flow EVM) now always appear as a `direct` inbound route with `lzFeeEstimate = 0`.
+
+### Fixed
+- **`discoverVaultTopology` for local single-chain vaults** — previously returned `hubChainId: 0` when a vault existed on one chain but was not registered as cross-chain in the factory. Now correctly returns the chain where the vault was found (e.g. Flow EVM `747` for ayFLOW).
+- **`discoverVaultTopology` parity** — same fix applied to the ethers module.
+
+### Changed
+- **Error handling** — all public write and read functions now throw typed SDK errors instead of raw viem/ethers reverts: `VaultPausedError`, `CapacityFullError`, `NotCuratorError`, `NotOwnerError`, `NotGuardianError`, `InvalidInputError`, `UnsupportedAssetError`, `ComposerNotConfiguredError`, and more. New `parseContractError()` helper converts contract reverts to typed errors.
+- **JSDoc** — all public functions across viem, ethers, and react modules are fully documented with `@param`, `@returns`, and `@throws`.
+
+---
+
 ## [1.0.0] - 2026-03-16
 
 ### Added

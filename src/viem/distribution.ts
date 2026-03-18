@@ -1,6 +1,7 @@
 import type { Address, PublicClient } from 'viem'
 import { getVaultStatus } from './utils.js'
 import { getVaultTopology } from './topology.js'
+import { MoreVaultsError } from './errors.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -55,7 +56,12 @@ export async function getVaultDistribution(
   spokeClients: Record<number, PublicClient>,
 ): Promise<VaultDistribution> {
   // Read hub status
-  const hubStatus = await getVaultStatus(hubClient, vault)
+  let hubStatus: Awaited<ReturnType<typeof getVaultStatus>>
+  try {
+    hubStatus = await getVaultStatus(hubClient, vault)
+  } catch {
+    throw new MoreVaultsError('Failed to read vault status on hub chain')
+  }
 
   const hubChainId = Number(hubClient.chain?.id ?? 0)
   const hubTotalAssets = hubStatus.totalAssets

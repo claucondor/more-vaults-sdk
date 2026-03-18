@@ -24,6 +24,7 @@ import type {
   AssetBalance,
   VaultAssetBreakdown,
 } from "./types";
+import { MoreVaultsError } from "./errors";
 
 // Multicall3 — deployed at the same address on every EVM chain
 const MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11";
@@ -62,8 +63,12 @@ export async function getCuratorVaultStatus(
     { target: vault, allowFailure: false, callData: curatorConfigIface.encodeFunctionData("paused") },
   ];
 
-  const results: { success: boolean; returnData: string }[] =
-    await mc.aggregate3.staticCall(calls);
+  let results: { success: boolean; returnData: string }[]
+  try {
+    results = await mc.aggregate3.staticCall(calls);
+  } catch (err) {
+    throw new MoreVaultsError(`Failed to read curator vault status for ${vault}: ${err instanceof Error ? err.message : String(err)}`)
+  }
 
   const curator = curatorConfigIface.decodeFunctionResult("curator", results[0].returnData)[0] as string;
   const timeLockPeriod = curatorConfigIface.decodeFunctionResult("timeLockPeriod", results[1].returnData)[0] as bigint;

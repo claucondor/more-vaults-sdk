@@ -15,8 +15,9 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee } from './utils'
 import { preflightSync, preflightAsync } from './preflight'
-import { EscrowNotConfiguredError, VaultPausedError, CapacityFullError } from './errors'
+import { EscrowNotConfiguredError, VaultPausedError, CapacityFullError, InvalidInputError } from './errors'
 import { validateWalletChain } from './chainValidation'
+import { parseContractError } from './errorParser'
 
 /**
  * D1 / D3 — Simple deposit (ERC-4626 standard).
@@ -44,6 +45,8 @@ export async function depositSimple(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  if (assets === 0n) throw new InvalidInputError('deposit amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
@@ -61,13 +64,19 @@ export async function depositSimple(
   await ensureAllowance(walletClient, publicClient, underlying, vault, assets)
 
   // Simulate then send
-  const { result: shares } = await publicClient.simulateContract({
-    address: vault,
-    abi: VAULT_ABI,
-    functionName: 'deposit',
-    args: [assets, getAddress(receiver)],
-    account: account.address,
-  })
+  let shares: bigint
+  try {
+    const { result } = await publicClient.simulateContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'deposit',
+      args: [assets, getAddress(receiver)],
+      account: account.address,
+    })
+    shares = result
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -78,7 +87,7 @@ export async function depositSimple(
     chain: walletClient.chain,
   })
 
-  return { txHash, shares }
+  return { txHash, shares: shares! }
 }
 
 /**
@@ -116,6 +125,9 @@ export async function depositMultiAsset(
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
 
+  if (tokens.length === 0) throw new InvalidInputError('tokens array must not be empty')
+  if (amounts.some(a => a === 0n)) throw new InvalidInputError('deposit amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
@@ -124,13 +136,19 @@ export async function depositMultiAsset(
     await ensureAllowance(walletClient, publicClient, tokens[i], vault, amounts[i])
   }
 
-  const { result: shares } = await publicClient.simulateContract({
-    address: vault,
-    abi: VAULT_ABI,
-    functionName: 'deposit',
-    args: [tokens, amounts, getAddress(receiver), minShares],
-    account: account.address,
-  })
+  let shares: bigint
+  try {
+    const { result } = await publicClient.simulateContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'deposit',
+      args: [tokens, amounts, getAddress(receiver), minShares],
+      account: account.address,
+    })
+    shares = result
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -141,7 +159,7 @@ export async function depositMultiAsset(
     chain: walletClient.chain,
   })
 
-  return { txHash, shares }
+  return { txHash, shares: shares! }
 }
 
 /**
@@ -174,6 +192,9 @@ export async function depositAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+
+  if (assets === 0n) throw new InvalidInputError('deposit amount must be greater than zero')
+
   const escrow = addresses.escrow
     ? getAddress(addresses.escrow)
     : await publicClient.readContract({ address: vault, abi: CONFIG_ABI, functionName: 'getEscrow' })
@@ -201,27 +222,35 @@ export async function depositAsync(
     [assets, getAddress(receiver)],
   ) as `0x${string}`
 
-  const [{ result: guid }, gasEstimate] = await Promise.all([
-    publicClient.simulateContract({
-      address: vault,
-      abi: BRIDGE_ABI,
-      functionName: 'initVaultActionRequest',
-      args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
-      value: lzFee,
-      account: account.address,
-    }),
-    publicClient.estimateContractGas({
-      address: vault,
-      abi: BRIDGE_ABI,
-      functionName: 'initVaultActionRequest',
-      args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
-      value: lzFee,
-      account: account.address,
-    }),
-  ])
+  let guid: `0x${string}`
+  let gasEstimate: bigint
+  try {
+    const [{ result }, gas] = await Promise.all([
+      publicClient.simulateContract({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
+        value: lzFee,
+        account: account.address,
+      }),
+      publicClient.estimateContractGas({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.DEPOSIT, actionCallData, 0n, extraOptions],
+        value: lzFee,
+        account: account.address,
+      }),
+    ])
+    guid = result as `0x${string}`
+    gasEstimate = gas
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   // LZ Read operations consistently underestimate gas — add 30% buffer.
-  const gas = gasEstimate * 130n / 100n
+  const gas = gasEstimate! * 130n / 100n
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -234,7 +263,7 @@ export async function depositAsync(
     gas,
   })
 
-  return { txHash, guid: guid as `0x${string}` }
+  return { txHash, guid: guid! }
 }
 
 /**
@@ -268,6 +297,9 @@ export async function mintAsync(
 ): Promise<AsyncRequestResult> {
   const account = walletClient.account!
   const vault = getAddress(addresses.vault)
+
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   const escrow = addresses.escrow
     ? getAddress(addresses.escrow)
     : await publicClient.readContract({ address: vault, abi: CONFIG_ABI, functionName: 'getEscrow' })
@@ -295,26 +327,34 @@ export async function mintAsync(
   ) as `0x${string}`
 
   // amountLimit = maxAssets (slippage check: actual assets spent must be <= maxAssets)
-  const [{ result: guid }, gasEstimate] = await Promise.all([
-    publicClient.simulateContract({
-      address: vault,
-      abi: BRIDGE_ABI,
-      functionName: 'initVaultActionRequest',
-      args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
-      value: lzFee,
-      account: account.address,
-    }),
-    publicClient.estimateContractGas({
-      address: vault,
-      abi: BRIDGE_ABI,
-      functionName: 'initVaultActionRequest',
-      args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
-      value: lzFee,
-      account: account.address,
-    }),
-  ])
+  let guid: `0x${string}`
+  let gasEstimate: bigint
+  try {
+    const [{ result }, gas] = await Promise.all([
+      publicClient.simulateContract({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
+        value: lzFee,
+        account: account.address,
+      }),
+      publicClient.estimateContractGas({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.MINT, actionCallData, maxAssets, extraOptions],
+        value: lzFee,
+        account: account.address,
+      }),
+    ])
+    guid = result as `0x${string}`
+    gasEstimate = gas
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
-  const gas = gasEstimate * 130n / 100n
+  const gas = gasEstimate! * 130n / 100n
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -327,7 +367,7 @@ export async function mintAsync(
     gas,
   })
 
-  return { txHash, guid: guid as `0x${string}` }
+  return { txHash, guid: guid! }
 }
 
 /**

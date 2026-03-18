@@ -15,6 +15,8 @@ import {
   getAddress,
 } from 'viem'
 import { ADMIN_WRITE_ABI } from './abis.js'
+import { InvalidInputError } from './errors.js'
+import { parseContractError } from './errorParser.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Curator direct actions
@@ -22,6 +24,13 @@ import { ADMIN_WRITE_ABI } from './abis.js'
 
 /**
  * Set the vault deposit capacity. Curator-only.
+ *
+ * @param walletClient  Wallet client with curator account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param capacity      New deposit capacity in underlying token decimals; use MaxUint256 for unlimited
+ * @returns             Transaction hash
+ * @throws {NotCuratorError} If the caller is not the vault curator
  */
 export async function setDepositCapacity(
   walletClient: WalletClient,
@@ -32,13 +41,17 @@ export async function setDepositCapacity(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'setDepositCapacity',
-    args: [capacity],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'setDepositCapacity',
+      args: [capacity],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -54,6 +67,13 @@ export async function setDepositCapacity(
 
 /**
  * Add a single available asset to the vault. Curator-only.
+ *
+ * @param walletClient  Wallet client with curator account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param asset         ERC-20 token address to add as an available asset
+ * @returns             Transaction hash
+ * @throws {NotCuratorError} If the caller is not the vault curator
  */
 export async function addAvailableAsset(
   walletClient: WalletClient,
@@ -64,13 +84,17 @@ export async function addAvailableAsset(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'addAvailableAsset',
-    args: [getAddress(asset)],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'addAvailableAsset',
+      args: [getAddress(asset)],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -85,7 +109,14 @@ export async function addAvailableAsset(
 }
 
 /**
- * Add multiple available assets to the vault. Curator-only.
+ * Add multiple available assets to the vault in a single transaction. Curator-only.
+ *
+ * @param walletClient  Wallet client with curator account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param assets        Array of ERC-20 token addresses to add
+ * @returns             Transaction hash
+ * @throws {NotCuratorError} If the caller is not the vault curator
  */
 export async function addAvailableAssets(
   walletClient: WalletClient,
@@ -97,13 +128,17 @@ export async function addAvailableAssets(
   const v = getAddress(vault)
   const checksummed = assets.map(getAddress)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'addAvailableAssets',
-    args: [checksummed],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'addAvailableAssets',
+      args: [checksummed],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -118,7 +153,14 @@ export async function addAvailableAssets(
 }
 
 /**
- * Disable an asset for deposits. Curator-only.
+ * Disable an asset for deposits so users can no longer deposit it. Curator-only.
+ *
+ * @param walletClient  Wallet client with curator account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param asset         ERC-20 token address to disable for deposits
+ * @returns             Transaction hash
+ * @throws {NotCuratorError} If the caller is not the vault curator
  */
 export async function disableAssetToDeposit(
   walletClient: WalletClient,
@@ -129,13 +171,17 @@ export async function disableAssetToDeposit(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'disableAssetToDeposit',
-    args: [getAddress(asset)],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'disableAssetToDeposit',
+      args: [getAddress(asset)],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -154,7 +200,14 @@ export async function disableAssetToDeposit(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Set the fee recipient address. Owner-only.
+ * Set the fee recipient address where management and performance fees are sent. Owner-only.
+ *
+ * @param walletClient  Wallet client with owner account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param recipient     Address that will receive vault fees
+ * @returns             Transaction hash
+ * @throws {NotOwnerError} If the caller is not the vault owner
  */
 export async function setFeeRecipient(
   walletClient: WalletClient,
@@ -165,13 +218,17 @@ export async function setFeeRecipient(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'setFeeRecipient',
-    args: [getAddress(recipient)],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'setFeeRecipient',
+      args: [getAddress(recipient)],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -186,7 +243,16 @@ export async function setFeeRecipient(
 }
 
 /**
- * Set the deposit whitelist with per-depositor caps. Owner-only.
+ * Set the deposit whitelist with per-depositor deposit caps. Owner-only.
+ *
+ * @param walletClient  Wallet client with owner account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param depositors    Array of addresses to whitelist
+ * @param caps          Array of maximum deposit amounts per depositor (parallel to `depositors`)
+ * @returns             Transaction hash
+ * @throws {NotOwnerError}     If the caller is not the vault owner
+ * @throws {InvalidInputError} If `depositors` and `caps` arrays have different lengths
  */
 export async function setDepositWhitelist(
   walletClient: WalletClient,
@@ -197,15 +263,24 @@ export async function setDepositWhitelist(
 ): Promise<{ txHash: `0x${string}` }> {
   const account = walletClient.account!
   const v = getAddress(vault)
+
+  if (depositors.length !== caps.length) {
+    throw new InvalidInputError('depositors and caps arrays must have the same length')
+  }
+
   const checksummed = depositors.map(getAddress)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'setDepositWhitelist',
-    args: [checksummed, caps],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'setDepositWhitelist',
+      args: [checksummed, caps],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -220,7 +295,13 @@ export async function setDepositWhitelist(
 }
 
 /**
- * Enable the deposit whitelist. Owner-only.
+ * Enable the deposit whitelist so only whitelisted addresses can deposit. Owner-only.
+ *
+ * @param walletClient  Wallet client with owner account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @returns             Transaction hash
+ * @throws {NotOwnerError} If the caller is not the vault owner
  */
 export async function enableDepositWhitelist(
   walletClient: WalletClient,
@@ -230,12 +311,16 @@ export async function enableDepositWhitelist(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'enableDepositWhitelist',
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'enableDepositWhitelist',
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -249,7 +334,14 @@ export async function enableDepositWhitelist(
 }
 
 /**
- * Pause the vault. Owner/guardian.
+ * Pause the vault, halting all deposits and redeems. Can be called by owner or guardian.
+ *
+ * @param walletClient  Wallet client with owner or guardian account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @returns             Transaction hash
+ * @throws {NotOwnerError}    If the caller is neither owner nor guardian
+ * @throws {VaultPausedError} If the vault is already paused
  */
 export async function pauseVault(
   walletClient: WalletClient,
@@ -259,12 +351,16 @@ export async function pauseVault(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'pause',
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'pause',
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -278,7 +374,13 @@ export async function pauseVault(
 }
 
 /**
- * Unpause the vault. Owner-only.
+ * Unpause the vault to resume deposits and redeems. Owner-only.
+ *
+ * @param walletClient  Wallet client with owner account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @returns             Transaction hash
+ * @throws {NotOwnerError} If the caller is not the vault owner
  */
 export async function unpauseVault(
   walletClient: WalletClient,
@@ -288,12 +390,16 @@ export async function unpauseVault(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'unpause',
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'unpause',
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -311,7 +417,16 @@ export async function unpauseVault(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Recover assets from the vault to a receiver. Guardian-only.
+ * Recover accidentally sent or stuck assets from the vault to a receiver. Guardian-only.
+ *
+ * @param walletClient  Wallet client with guardian account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @param asset         ERC-20 token address to recover
+ * @param receiver      Address that will receive the recovered tokens
+ * @param amount        Amount of tokens to recover (in token decimals)
+ * @returns             Transaction hash
+ * @throws {NotGuardianError} If the caller is not the vault guardian
  */
 export async function recoverAssets(
   walletClient: WalletClient,
@@ -324,13 +439,17 @@ export async function recoverAssets(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'recoverAssets',
-    args: [getAddress(asset), getAddress(receiver), amount],
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'recoverAssets',
+      args: [getAddress(asset), getAddress(receiver), amount],
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,
@@ -349,7 +468,16 @@ export async function recoverAssets(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Accept pending ownership transfer. Must be called by the pending owner.
+ * Accept a pending ownership transfer initiated by the current owner.
+ *
+ * Must be called by the pending owner (the address that was designated via
+ * `transferOwnership`). After this call, the caller becomes the new owner.
+ *
+ * @param walletClient  Wallet client with the pending owner account attached
+ * @param publicClient  Public client for simulation
+ * @param vault         Vault address (diamond proxy)
+ * @returns             Transaction hash
+ * @throws {NotOwnerError} If the caller is not the pending owner
  */
 export async function acceptOwnership(
   walletClient: WalletClient,
@@ -359,12 +487,16 @@ export async function acceptOwnership(
   const account = walletClient.account!
   const v = getAddress(vault)
 
-  await publicClient.simulateContract({
-    address: v,
-    abi: ADMIN_WRITE_ABI,
-    functionName: 'acceptOwnership',
-    account: account.address,
-  })
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: ADMIN_WRITE_ABI,
+      functionName: 'acceptOwnership',
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: v,

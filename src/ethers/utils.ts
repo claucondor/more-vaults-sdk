@@ -7,6 +7,7 @@
 import { Contract, Interface, ZeroAddress } from "ethers";
 import type { Provider, Signer } from "ethers";
 import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI } from "./abis";
+import { MoreVaultsError, CCManagerNotConfiguredError, AsyncRequestTimeoutError } from "./errors";
 
 // Minimal ABI for Stargate type detection
 const STARGATE_TYPE_ABI = [
@@ -144,9 +145,23 @@ export async function quoteLzFee(
   vault: string,
   extraOptions: string = "0x"
 ): Promise<bigint> {
-  const bridge = new Contract(vault, BRIDGE_ABI, provider);
-  const fee: bigint = await bridge.quoteAccountingFee(extraOptions);
-  return fee;
+  try {
+    const bridge = new Contract(vault, BRIDGE_ABI, provider);
+    const fee: bigint = await bridge.quoteAccountingFee(extraOptions);
+    return fee;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (
+      msg.includes('CCManager') ||
+      msg.includes('CrossChainAccountingManager') ||
+      msg.includes('not configured') ||
+      msg.includes('zeroAddress') ||
+      msg.includes('address(0)')
+    ) {
+      throw new CCManagerNotConfiguredError(vault)
+    }
+    throw e
+  }
 }
 
 /**
@@ -160,16 +175,20 @@ export async function isAsyncMode(
   provider: Provider,
   vault: string
 ): Promise<boolean> {
-  const config = new Contract(vault, CONFIG_ABI, provider);
-  const bridge = new Contract(vault, BRIDGE_ABI, provider);
+  try {
+    const config = new Contract(vault, CONFIG_ABI, provider);
+    const bridge = new Contract(vault, BRIDGE_ABI, provider);
 
-  const [isHub, oraclesEnabled]: [boolean, boolean] = await Promise.all([
-    config.isHub(),
-    bridge.oraclesCrossChainAccounting(),
-  ]);
+    const [isHub, oraclesEnabled]: [boolean, boolean] = await Promise.all([
+      config.isHub(),
+      bridge.oraclesCrossChainAccounting(),
+    ]);
 
-  if (!isHub) return false;
-  return !oraclesEnabled;
+    if (!isHub) return false;
+    return !oraclesEnabled;
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -184,20 +203,75 @@ export async function getAsyncRequestStatus(
   provider: Provider,
   vault: string,
   guid: string
-): Promise<{ fulfilled: boolean; finalized: boolean; result: bigint }> {
+): Promise<{ fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }> {
   const bridge = new Contract(vault, BRIDGE_ABI, provider);
 
-  const [info, finalizationResult]: [CrossChainRequestInfo, bigint] =
-    await Promise.all([
+  let info: CrossChainRequestInfo
+  let finalizationResult: bigint
+  try {
+    const [i, f]: [CrossChainRequestInfo, bigint] = await Promise.all([
       bridge.getRequestInfo(guid),
       bridge.getFinalizationResult(guid),
     ]);
+    info = i
+    finalizationResult = f
+  } catch {
+    throw new MoreVaultsError('Failed to read async request status')
+  }
 
   return {
     fulfilled: info.fulfilled,
     finalized: info.finalized,
+    refunded: (info as any).refunded ?? false,
     result: finalizationResult,
   };
+}
+
+export interface AsyncRequestFinalResult {
+  /** 'completed' = assets/shares received, 'refunded' = tokens returned to user */
+  status: 'completed' | 'refunded'
+  /** For deposit: shares minted. For redeem: assets returned. 0 if refunded. */
+  result: bigint
+}
+
+/**
+ * Poll an async cross-chain request until it finalizes or times out.
+ *
+ * @param provider      Read-only provider on the hub chain
+ * @param vault         Vault address
+ * @param guid          GUID from smartDeposit/smartRedeem result
+ * @param pollInterval  Milliseconds between polls (default: 30_000)
+ * @param timeout       Max wait time in milliseconds (default: 900_000 = 15 min)
+ * @param onPoll        Optional callback invoked after each poll with current status
+ * @returns             Final result with status and amount
+ * @throws              AsyncRequestTimeoutError if timeout is reached
+ */
+export async function waitForAsyncRequest(
+  provider: Provider,
+  vault: string,
+  guid: string,
+  pollInterval: number = 30_000,
+  timeout: number = 900_000,
+  onPoll?: (status: { fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }) => void,
+): Promise<AsyncRequestFinalResult> {
+  const deadline = Date.now() + timeout
+
+  while (Date.now() < deadline) {
+    const status = await getAsyncRequestStatus(provider, vault, guid)
+
+    if (onPoll) onPoll(status)
+
+    if (status.finalized) {
+      return { status: 'completed', result: status.result }
+    }
+    if (status.refunded) {
+      return { status: 'refunded', result: 0n }
+    }
+
+    await new Promise(r => setTimeout(r, pollInterval))
+  }
+
+  throw new AsyncRequestTimeoutError(guid)
 }
 
 /**

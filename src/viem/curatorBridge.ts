@@ -31,6 +31,7 @@ import {
 import { BRIDGE_FACET_ABI, LZ_ADAPTER_ABI } from './abis.js'
 import { OFT_ROUTES } from './chains.js'
 import { getCuratorVaultStatus } from './curatorStatus.js'
+import { parseContractError } from './errorParser.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -202,14 +203,17 @@ export async function quoteCuratorBridgeFee(
   const bridgeSpecificParams = encodeBridgeParamsForQuote(params)
 
   // Call quoteBridgeFee on the LzAdapter (not the vault)
-  const nativeFee = await publicClient.readContract({
-    address: lzAdapter,
-    abi: LZ_ADAPTER_ABI,
-    functionName: 'quoteBridgeFee',
-    args: [bridgeSpecificParams],
-  })
-
-  return nativeFee as bigint
+  try {
+    const nativeFee = await publicClient.readContract({
+      address: lzAdapter,
+      abi: LZ_ADAPTER_ABI,
+      functionName: 'quoteBridgeFee',
+      args: [bridgeSpecificParams],
+    })
+    return nativeFee as bigint
+  } catch (err) {
+    parseContractError(err, vault)
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -268,7 +272,25 @@ export async function executeCuratorBridge(
   // Step 3: Encode full 5-field bridgeSpecificParams
   const bridgeSpecificParams = encodeBridgeParams(params)
 
-  // Step 4: Execute bridging with fee as msg.value
+  // Step 4: Simulate then execute bridging with fee as msg.value
+  try {
+    await publicClient.simulateContract({
+      address: v,
+      abi: BRIDGE_FACET_ABI,
+      functionName: 'executeBridging',
+      args: [
+        lzAdapter,
+        getAddress(token),
+        params.amount,
+        bridgeSpecificParams,
+      ],
+      value: fee,
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, v, account.address)
+  }
+
   const txHash = await walletClient.writeContract({
     address: v,
     abi: BRIDGE_FACET_ABI,

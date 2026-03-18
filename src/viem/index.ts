@@ -72,6 +72,19 @@ export {
   NotHubVaultError,
   MissingEscrowAddressError,
   WrongChainError,
+  NotCuratorError,
+  NotOwnerError,
+  NotGuardianError,
+  InvalidInputError,
+  ActionsStillPendingError,
+  NoSuchActionsError,
+  SlippageExceededError,
+  UnsupportedAssetError,
+  ComposerNotConfiguredError,
+  UnsupportedChainError,
+  InsufficientBalanceError,
+  AsyncRequestTimeoutError,
+  ComposeTimeoutError,
 } from './errors'
 
 // --- Deposit Flows ---

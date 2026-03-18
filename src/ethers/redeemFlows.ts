@@ -13,11 +13,12 @@ import {
 } from "./types";
 import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
-import { EscrowNotConfiguredError } from "./errors";
+import { EscrowNotConfiguredError, InvalidInputError, VaultPausedError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
 import { getVaultStatus, quoteLzFee, detectStargateOft } from "./utils";
 import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
 import { OMNI_FACTORY_ADDRESS } from "./topology";
+import { parseContractError } from "./errorParser";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -62,18 +63,30 @@ export async function redeemShares(
   receiver: string,
   owner: string
 ): Promise<RedeemResult> {
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
 
   // Static call to get the return value (assets) before broadcasting
-  const assets: bigint = await vault.redeem.staticCall(shares, receiver, owner);
+  let assets: bigint
+  try {
+    assets = await vault.redeem.staticCall(shares, receiver, owner);
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
 
-  const tx = await vault.redeem(shares, receiver, owner);
-  const receipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await vault.redeem(shares, receiver, owner);
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
+  const receipt = await tx!.wait();
 
-  return { receipt, assets };
+  return { receipt, assets: assets! };
 }
 
 // ---------------------------------------------------------------------------
@@ -99,12 +112,19 @@ export async function withdrawAssets(
   receiver: string,
   owner: string
 ): Promise<RedeemResult> {
+  if (assets === 0n) throw new InvalidInputError('assets amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
-  const tx = await vault.withdraw(assets, receiver, owner);
-  const receipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await vault.withdraw(assets, receiver, owner);
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
+  const receipt = await tx!.wait();
 
   return { receipt, assets };
 }
@@ -132,12 +152,19 @@ export async function requestRedeem(
   shares: bigint,
   owner: string
 ): Promise<{ receipt: ContractTransactionReceipt }> {
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
-  const tx = await vault.requestRedeem(shares, owner);
-  const receipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await vault.requestRedeem(shares, owner);
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
+  const receipt = await tx!.wait();
   return { receipt };
 }
 
@@ -201,6 +228,8 @@ export async function redeemAsync(
   lzFee: bigint,
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   const provider = signer.provider!;
   const escrow = addresses.escrow
     ?? await new Contract(addresses.vault, ['function getEscrow() view returns (address)'], provider).getEscrow()
@@ -227,24 +256,34 @@ export async function redeemAsync(
   const bridge = new Contract(addresses.vault, BRIDGE_ABI, signer);
 
   // Static call first to capture the return value (guid) before broadcasting
-  const guid: string = await bridge.initVaultActionRequest.staticCall(
-    ActionType.REDEEM,
-    actionCallData,
-    0,
-    extraOptions,
-    { value: lzFee }
-  );
+  let guid: string
+  try {
+    guid = await bridge.initVaultActionRequest.staticCall(
+      ActionType.REDEEM,
+      actionCallData,
+      0,
+      extraOptions,
+      { value: lzFee }
+    );
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
 
-  const tx = await bridge.initVaultActionRequest(
-    ActionType.REDEEM,
-    actionCallData,
-    0, // amountLimit MUST be 0 for redeems
-    extraOptions,
-    { value: lzFee }
-  );
-  const receipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await bridge.initVaultActionRequest(
+      ActionType.REDEEM,
+      actionCallData,
+      0, // amountLimit MUST be 0 for redeems
+      extraOptions,
+      { value: lzFee }
+    );
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
+  const receipt = await tx!.wait();
 
-  return { receipt, guid };
+  return { receipt, guid: guid! };
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +315,8 @@ export async function bridgeSharesToHub(
   receiver: string,
   lzFee: bigint
 ): Promise<{ receipt: ContractTransactionReceipt }> {
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   await ensureAllowance(signer, shareOFT, shareOFT, shares);
 
   const oft = new Contract(shareOFT, OFT_ABI, signer);
@@ -334,7 +375,7 @@ export async function smartRedeem(
   const status = await getVaultStatus(provider, vault);
 
   if (status.mode === "paused") {
-    throw new Error(`[MoreVaults] Vault ${vault} is paused. Cannot redeem.`);
+    throw new VaultPausedError(vault)
   }
 
   if (status.recommendedDepositFlow === "depositAsync") {
@@ -377,6 +418,8 @@ export async function bridgeAssetsToSpoke(
   lzFee: bigint,
   isStargate: boolean = true
 ): Promise<{ receipt: ContractTransactionReceipt }> {
+  if (amount === 0n) throw new InvalidInputError('amount must be greater than zero')
+
   const oft = new Contract(assetOFT, OFT_ABI, signer);
 
   // Read underlying token and approve

@@ -76,6 +76,19 @@ export {
   NotHubVaultError,
   MissingEscrowAddressError,
   WrongChainError,
+  NotCuratorError,
+  NotOwnerError,
+  NotGuardianError,
+  InvalidInputError,
+  ActionsStillPendingError,
+  NoSuchActionsError,
+  SlippageExceededError,
+  UnsupportedAssetError,
+  ComposerNotConfiguredError,
+  UnsupportedChainError,
+  InsufficientBalanceError,
+  AsyncRequestTimeoutError,
+  ComposeTimeoutError,
 } from "./errors";
 
 // --- Deposit flows ---
@@ -119,10 +132,11 @@ export {
   quoteLzFee,
   isAsyncMode,
   getAsyncRequestStatus,
+  waitForAsyncRequest,
   getVaultStatus,
   detectStargateOft,
 } from "./utils";
-export type { VaultStatus, VaultMode } from "./utils";
+export type { VaultStatus, VaultMode, AsyncRequestFinalResult } from "./utils";
 
 // --- Pre-flight validation ---
 export {

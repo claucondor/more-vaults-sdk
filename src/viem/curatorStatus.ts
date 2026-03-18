@@ -5,9 +5,10 @@
  * batched RPC efficiency.
  */
 
-import { type Address, type PublicClient, getAddress } from 'viem'
+import { type Address, type PublicClient, getAddress, zeroAddress } from 'viem'
 import { MULTICALL_ABI, CURATOR_CONFIG_ABI, VAULT_ANALYSIS_ABI, REGISTRY_ABI, METADATA_ABI, ERC20_ABI, VAULT_ABI } from './abis.js'
 import type { CuratorVaultStatus, PendingAction, VaultAnalysis, AssetInfo, AssetBalance, VaultAssetBreakdown } from './types.js'
+import { MoreVaultsError } from './errors.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -28,15 +29,7 @@ export async function getCuratorVaultStatus(
 ): Promise<CuratorVaultStatus> {
   const v = getAddress(vault)
 
-  const [
-    curator,
-    timeLockPeriod,
-    maxSlippagePercent,
-    currentNonce,
-    availableAssets,
-    lzAdapter,
-    paused,
-  ] = await publicClient.multicall({
+  const results = await publicClient.multicall({
     contracts: [
       { address: v, abi: CURATOR_CONFIG_ABI, functionName: 'curator' },
       { address: v, abi: CURATOR_CONFIG_ABI, functionName: 'timeLockPeriod' },
@@ -46,17 +39,25 @@ export async function getCuratorVaultStatus(
       { address: v, abi: CURATOR_CONFIG_ABI, functionName: 'getCrossChainAccountingManager' },
       { address: v, abi: CURATOR_CONFIG_ABI, functionName: 'paused' },
     ],
-    allowFailure: false,
+    allowFailure: true,
   })
 
+  const curator            = results[0].status === 'success' ? (results[0].result as Address) : zeroAddress
+  const timeLockPeriod     = results[1].status === 'success' ? (results[1].result as bigint)  : 0n
+  const maxSlippagePercent = results[2].status === 'success' ? (results[2].result as bigint)  : 0n
+  const currentNonce       = results[3].status === 'success' ? (results[3].result as bigint)  : 0n
+  const availableAssets    = results[4].status === 'success' ? (results[4].result as Address[]) : [] as Address[]
+  const lzAdapter          = results[5].status === 'success' ? (results[5].result as Address) : zeroAddress
+  const paused             = results[6].status === 'success' ? (results[6].result as boolean) : false
+
   return {
-    curator: getAddress(curator as Address),
-    timeLockPeriod: timeLockPeriod as bigint,
-    maxSlippagePercent: maxSlippagePercent as bigint,
-    currentNonce: currentNonce as bigint,
-    availableAssets: (availableAssets as Address[]).map(getAddress),
-    lzAdapter: getAddress(lzAdapter as Address),
-    paused: paused as boolean,
+    curator: getAddress(curator),
+    timeLockPeriod,
+    maxSlippagePercent,
+    currentNonce,
+    availableAssets: availableAssets.map(getAddress),
+    lzAdapter: getAddress(lzAdapter),
+    paused,
   }
 }
 
@@ -78,15 +79,22 @@ export async function getPendingActions(
 ): Promise<PendingAction> {
   const v = getAddress(vault)
 
-  const [actionsResult, block] = await Promise.all([
-    publicClient.readContract({
+  let actionsResult: unknown
+  try {
+    actionsResult = await publicClient.readContract({
       address: v,
       abi: MULTICALL_ABI,
       functionName: 'getPendingActions',
       args: [nonce],
-    }),
-    publicClient.getBlock(),
-  ])
+    })
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (msg.includes('NoSuchActions')) {
+      throw new MoreVaultsError(`No actions found for nonce ${nonce}`)
+    }
+    throw e
+  }
+  const block = await publicClient.getBlock()
 
   const [actionsData, pendingUntil] = actionsResult as [`0x${string}`[], bigint]
   const isExecutable = pendingUntil > 0n && block.timestamp >= pendingUntil
@@ -114,11 +122,16 @@ export async function isCurator(
   vault: Address,
   address: Address,
 ): Promise<boolean> {
-  const curatorAddress = await publicClient.readContract({
-    address: getAddress(vault),
-    abi: CURATOR_CONFIG_ABI,
-    functionName: 'curator',
-  })
+  let curatorAddress: unknown
+  try {
+    curatorAddress = await publicClient.readContract({
+      address: getAddress(vault),
+      abi: CURATOR_CONFIG_ABI,
+      functionName: 'curator',
+    })
+  } catch {
+    throw new MoreVaultsError('Failed to read curator address from vault')
+  }
 
   return getAddress(curatorAddress as Address) === getAddress(address)
 }
@@ -146,17 +159,17 @@ export async function getVaultAnalysis(
         address: v,
         abi: VAULT_ANALYSIS_ABI,
         functionName: 'getAvailableAssets',
-      }),
+      }).catch(() => [] as Address[]),
       publicClient.readContract({
         address: v,
         abi: VAULT_ANALYSIS_ABI,
         functionName: 'getDepositableAssets',
-      }),
+      }).catch(() => [] as Address[]),
       publicClient.readContract({
         address: v,
         abi: VAULT_ANALYSIS_ABI,
         functionName: 'isDepositWhitelistEnabled',
-      }),
+      }).catch(() => false as boolean),
       publicClient.readContract({
         address: v,
         abi: VAULT_ANALYSIS_ABI,
@@ -225,11 +238,16 @@ export async function checkProtocolWhitelist(
 ): Promise<Record<string, boolean>> {
   const v = getAddress(vault)
 
-  const registryRaw = await publicClient.readContract({
-    address: v,
-    abi: VAULT_ANALYSIS_ABI,
-    functionName: 'moreVaultsRegistry',
-  })
+  let registryRaw: unknown
+  try {
+    registryRaw = await publicClient.readContract({
+      address: v,
+      abi: VAULT_ANALYSIS_ABI,
+      functionName: 'moreVaultsRegistry',
+    })
+  } catch {
+    throw new MoreVaultsError('Failed to read registry address from vault')
+  }
 
   const registry = getAddress(registryRaw as Address)
 
@@ -273,11 +291,16 @@ export async function getVaultAssetBreakdown(
   const v = getAddress(vault)
 
   // Step 1: get available assets list
-  const availableRaw = await publicClient.readContract({
-    address: v,
-    abi: VAULT_ANALYSIS_ABI,
-    functionName: 'getAvailableAssets',
-  }) as Address[]
+  let availableRaw: Address[]
+  try {
+    availableRaw = await publicClient.readContract({
+      address: v,
+      abi: VAULT_ANALYSIS_ABI,
+      functionName: 'getAvailableAssets',
+    }) as Address[]
+  } catch {
+    return { assets: [], totalAssets: 0n, totalSupply: 0n, underlyingDecimals: 6 }
+  }
 
   const addresses = availableRaw.map(getAddress)
 

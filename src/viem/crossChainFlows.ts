@@ -14,6 +14,8 @@ import { ensureAllowance, detectStargateOft } from './utils'
 import { OFT_ROUTES, EID_TO_CHAIN_ID } from './chains'
 import { OMNI_FACTORY_ADDRESS } from './topology'
 import { createChainClient } from './spokeRoutes'
+import { ComposerNotConfiguredError, InvalidInputError } from './errors'
+import { parseContractError } from './errorParser'
 
 /** LZ Endpoint V2 address — same on all EVM chains */
 const LZ_ENDPOINT = '0x1a44076050125825900e736c501f859c50fe728c' as const
@@ -205,6 +207,8 @@ export async function depositFromSpoke(
   const account = walletClient.account!
   const oft = getAddress(spokeOFT)
 
+  if (amount === 0n) throw new InvalidInputError('deposit amount must be greater than zero')
+
   // OFTAdapters (e.g. Stargate) wrap an existing ERC-20: token() returns the underlying.
   // Pure OFTs are their own token: token() returns address(this).
   // Either way, approve whatever token() says — the OFT contract handles the rest.
@@ -232,7 +236,7 @@ export async function depositFromSpoke(
     functionName: 'vaultComposer',
     args: [getAddress(vault)],
   })
-  if (composerAddress === zeroAddress) throw new Error(`No composer registered for vault ${vault} on hub chainId ${hubChainId}`)
+  if (composerAddress === zeroAddress) throw new ComposerNotConfiguredError(vault)
   const composerBytes32 = pad(composerAddress, { size: 32 })
 
   const receiverBytes32 = pad(getAddress(receiver), { size: 32 })
@@ -340,15 +344,20 @@ export async function depositFromSpoke(
     lzTokenFee: 0n,
   }
 
-  const { result } = await publicClient.simulateContract({
-    address: oft,
-    abi: OFT_ABI,
-    functionName: 'send',
-    args: [sendParam, fee, account.address],
-    value: lzFee,
-    account: account.address,
-  })
-  const guid = (result as unknown as [{ guid: `0x${string}` }, unknown])[0].guid
+  let guid: `0x${string}`
+  try {
+    const { result } = await publicClient.simulateContract({
+      address: oft,
+      abi: OFT_ABI,
+      functionName: 'send',
+      args: [sendParam, fee, account.address],
+      value: lzFee,
+      account: account.address,
+    })
+    guid = (result as unknown as [{ guid: `0x${string}` }, unknown])[0].guid
+  } catch (err) {
+    parseContractError(err, vault, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: oft,
@@ -374,7 +383,7 @@ export async function depositFromSpoke(
       endpoint: LZ_ENDPOINT,
       from: zeroAddress, // resolved by waitForCompose — Stargate pool on hub
       to: composerAddress,
-      guid,
+      guid: guid!,
       index: 0,
       message: '0x', // resolved by waitForCompose — from ComposeSent event
       isStargate: true,
@@ -383,7 +392,7 @@ export async function depositFromSpoke(
     }
   }
 
-  return { txHash, guid, composeData }
+  return { txHash, guid: guid!, composeData }
 }
 
 /**
@@ -744,6 +753,12 @@ export async function quoteComposeFee(
 }
 
 /**
+ * Event topic0 emitted by the escrow when initVaultActionRequest creates a new request.
+ * topic1 = GUID (bytes32). Used to extract the async request GUID from executeCompose receipts.
+ */
+const ESCROW_REQUEST_TOPIC = '0x304ac8b57de34b9e6118fb049ba362689cfcfab98c30c9d78e3e2e14be7e0972' as const
+
+/**
  * Execute a pending LZ compose on the hub chain (Stargate 2-TX flow, step 2).
  *
  * Calls `endpoint.lzCompose{value: fee}(from, to, guid, index, message, '0x')`.
@@ -753,15 +768,10 @@ export async function quoteComposeFee(
  * @param walletClient     Wallet client on the HUB chain (user signs TX2 here)
  * @param hubPublicClient  Public client on the HUB chain
  * @param composeData      Complete compose data (from waitForCompose or manual)
- * @param fee              ETH to send (from quoteComposeFee). Covers readFee for D7.
- * @returns                Transaction hash of the compose execution
+ * @param fee              ETH to send (from quoteComposeFee); covers readFee for D7
+ * @returns                Transaction hash and optional async request GUID for D7 tracking
+ * @throws {ComposerNotConfiguredError} If compose is not found or already delivered
  */
-/**
- * Event topic0 emitted by the escrow when initVaultActionRequest creates a new request.
- * topic1 = GUID (bytes32). Used to extract the async request GUID from executeCompose receipts.
- */
-const ESCROW_REQUEST_TOPIC = '0x304ac8b57de34b9e6118fb049ba362689cfcfab98c30c9d78e3e2e14be7e0972' as const
-
 export async function executeCompose(
   walletClient: WalletClient,
   hubPublicClient: PublicClient,
@@ -787,14 +797,18 @@ export async function executeCompose(
   }
 
   // Simulate first to catch reverts early
-  await hubPublicClient.simulateContract({
-    address: endpoint,
-    abi: LZ_ENDPOINT_ABI,
-    functionName: 'lzCompose',
-    args: [composeData.from, composeData.to, composeData.guid, composeData.index, composeData.message, '0x'],
-    value: fee,
-    account: account.address,
-  })
+  try {
+    await hubPublicClient.simulateContract({
+      address: endpoint,
+      abi: LZ_ENDPOINT_ABI,
+      functionName: 'lzCompose',
+      args: [composeData.from, composeData.to, composeData.guid, composeData.index, composeData.message, '0x'],
+      value: fee,
+      account: account.address,
+    })
+  } catch (err) {
+    parseContractError(err, composeData.to, account.address)
+  }
 
   const txHash = await walletClient.writeContract({
     address: endpoint,

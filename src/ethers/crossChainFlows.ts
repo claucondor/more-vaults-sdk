@@ -4,6 +4,7 @@ import type { ContractTransactionReceipt } from "ethers";
 import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider } from "./chains";
 import { detectStargateOft } from "./utils";
 import { OMNI_FACTORY_ADDRESS } from "./topology";
+import { ComposerNotConfiguredError, InvalidInputError } from "./errors";
 
 /** LZ Endpoint V2 address — same on all EVM chains */
 const LZ_ENDPOINT = "0x1a44076050125825900e736c501f859c50fe728c";
@@ -73,6 +74,11 @@ export async function depositFromSpoke(
   minAmountLD?: bigint,
   extraOptions: string = "0x",
 ): Promise<{ receipt: ContractTransactionReceipt }> {
+  if (amount === 0n) throw new InvalidInputError('deposit amount must be greater than zero')
+  if (!composer || composer === '0x0000000000000000000000000000000000000000') {
+    throw new ComposerNotConfiguredError(spokeOFT)
+  }
+
   await ensureAllowance(signer, spokeOFT, spokeOFT, amount);
 
   const oft = new Contract(spokeOFT, OFT_ABI, signer);

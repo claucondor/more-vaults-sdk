@@ -8,9 +8,10 @@ import {
   ActionType,
 } from "./types";
 import { preflightAsync, preflightSync } from "./preflight";
-import { EscrowNotConfiguredError, VaultPausedError, CapacityFullError } from "./errors";
+import { EscrowNotConfiguredError, VaultPausedError, CapacityFullError, InvalidInputError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
 import { getVaultStatus, quoteLzFee } from "./utils";
+import { parseContractError } from "./errorParser";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -52,6 +53,8 @@ export async function depositSimple(
   assets: bigint,
   receiver: string
 ): Promise<DepositResult> {
+  if (assets === 0n) throw new InvalidInputError('deposit amount must be greater than zero')
+
   const provider = signer.provider!;
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
@@ -118,6 +121,9 @@ export async function depositMultiAsset(
   receiver: string,
   minShares: bigint
 ): Promise<DepositResult> {
+  if (tokens.length === 0) throw new InvalidInputError('tokens array must not be empty')
+  if (amounts.some(a => a === 0n)) throw new InvalidInputError('deposit amount must be greater than zero')
+
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
 
@@ -127,9 +133,14 @@ export async function depositMultiAsset(
   }
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
-  const tx = await vault[
-    "deposit(address[],uint256[],address,uint256)"
-  ](tokens, amounts, receiver, minShares);
+  let tx: any
+  try {
+    tx = await vault[
+      "deposit(address[],uint256[],address,uint256)"
+    ](tokens, amounts, receiver, minShares);
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
   const receipt = await tx.wait();
 
   let shares = 0n;
@@ -220,24 +231,34 @@ export async function depositAsync(
   const bridge = new Contract(addresses.vault, BRIDGE_ABI, signer);
 
   // Static call first to capture the return value (guid) before broadcasting
-  const guid: string = await bridge.initVaultActionRequest.staticCall(
-    ActionType.DEPOSIT,
-    actionCallData,
-    0,
-    extraOptions,
-    { value: lzFee }
-  );
+  let guid: string
+  try {
+    guid = await bridge.initVaultActionRequest.staticCall(
+      ActionType.DEPOSIT,
+      actionCallData,
+      0,
+      extraOptions,
+      { value: lzFee }
+    );
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
 
-  const tx = await bridge.initVaultActionRequest(
-    ActionType.DEPOSIT,
-    actionCallData,
-    0, // amountLimit = 0 for deposits (minAmountOut handled by cross-chain manager)
-    extraOptions,
-    { value: lzFee }
-  );
-  const receipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await bridge.initVaultActionRequest(
+      ActionType.DEPOSIT,
+      actionCallData,
+      0, // amountLimit = 0 for deposits (minAmountOut handled by cross-chain manager)
+      extraOptions,
+      { value: lzFee }
+    );
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
+  const receipt = await tx!.wait();
 
-  return { receipt, guid };
+  return { receipt, guid: guid! };
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +290,8 @@ export async function mintAsync(
   lzFee: bigint,
   extraOptions: string = "0x"
 ): Promise<AsyncRequestResult> {
+  if (shares === 0n) throw new InvalidInputError('shares amount must be greater than zero')
+
   const provider = signer.provider!;
   const escrow = addresses.escrow
     ?? await new Contract(addresses.vault, ['function getEscrow() view returns (address)'], provider).getEscrow()
@@ -296,24 +319,34 @@ export async function mintAsync(
   const bridge = new Contract(addresses.vault, BRIDGE_ABI, signer);
 
   // Static call first to capture the return value (guid) before broadcasting
-  const guid: string = await bridge.initVaultActionRequest.staticCall(
-    ActionType.MINT,
-    actionCallData,
-    maxAssets,
-    extraOptions,
-    { value: lzFee }
-  );
+  let guid: string
+  try {
+    guid = await bridge.initVaultActionRequest.staticCall(
+      ActionType.MINT,
+      actionCallData,
+      maxAssets,
+      extraOptions,
+      { value: lzFee }
+    );
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
 
-  const tx = await bridge.initVaultActionRequest(
-    ActionType.MINT,
-    actionCallData,
-    maxAssets,
-    extraOptions,
-    { value: lzFee }
-  );
-  const receipt = await tx.wait();
+  let tx: any
+  try {
+    tx = await bridge.initVaultActionRequest(
+      ActionType.MINT,
+      actionCallData,
+      maxAssets,
+      extraOptions,
+      { value: lzFee }
+    );
+  } catch (err) {
+    parseContractError(err, addresses.vault)
+  }
+  const receipt = await tx!.wait();
 
-  return { receipt, guid };
+  return { receipt, guid: guid! };
 }
 
 /**

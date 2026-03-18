@@ -11,6 +11,7 @@ import { OFT_ROUTES, CHAIN_ID_TO_EID, createChainProvider } from "./chains";
 import { OFT_ABI, ERC20_ABI } from "./abis";
 import { isAsyncMode, quoteLzFee } from "./utils";
 import { getVaultTopology } from "./topology";
+import { MoreVaultsError } from "./errors";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -120,11 +121,11 @@ export async function getInboundRoutes(
   userAddress: string,
 ): Promise<InboundRoute[]> {
   const hubEid = CHAIN_ID_TO_EID[hubChainId];
-  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`);
+  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`);
 
   // Fetch vault topology to get registered spoke chains
   const hubProvider = createChainProvider(hubChainId);
-  if (!hubProvider) throw new Error(`No public RPC for hub chainId ${hubChainId}`);
+  if (!hubProvider) throw new MoreVaultsError(`No public RPC for hub chainId ${hubChainId}`);
   const topology = await getVaultTopology(hubProvider, vault);
   const registeredSpokes = new Set(topology.spokeChainIds);
 
@@ -281,10 +282,10 @@ export async function getOutboundRoutes(
   vault: string,
 ): Promise<OutboundRoute[]> {
   const hubEid = CHAIN_ID_TO_EID[hubChainId];
-  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`);
+  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`);
 
   const hubProvider = createChainProvider(hubChainId);
-  if (!hubProvider) throw new Error(`No public RPC for hub chainId ${hubChainId}`);
+  if (!hubProvider) throw new MoreVaultsError(`No public RPC for hub chainId ${hubChainId}`);
 
   const topology = await getVaultTopology(hubProvider, vault);
 
@@ -335,10 +336,10 @@ export async function quoteRouteDepositFee(
   const hubEid = CHAIN_ID_TO_EID[hubChainId];
   if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`);
 
-  if (!route.spokeOft) throw new Error("Route is oft-compose but spokeOft is null");
+  if (!route.spokeOft) throw new MoreVaultsError("Route is oft-compose but spokeOft is null");
 
   const spokeProvider = createChainProvider(route.spokeChainId);
-  if (!spokeProvider) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`);
+  if (!spokeProvider) throw new MoreVaultsError(`No public RPC for spoke chainId ${route.spokeChainId}`);
 
   const receiverBytes32 =
     "0x" + userAddress.replace(/^0x/, "").toLowerCase().padStart(64, "0");
