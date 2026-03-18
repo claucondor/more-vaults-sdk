@@ -1,6 +1,7 @@
 import { type Address, type PublicClient, getAddress } from 'viem'
 import { EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, CHAIN_IDS } from './chains'
 import { createChainClient } from './spokeRoutes'
+import { MoreVaultsError } from './errors.js'
 
 // MoreVaults OMNI factory — same address on every supported chain (CREATE3)
 export const OMNI_FACTORY_ADDRESS: Address = '0x7bDB8B17604b03125eFAED33cA0c55FBf856BB0C'
@@ -81,68 +82,73 @@ export async function getVaultTopology(
   vault: Address,
   factoryAddress: Address = OMNI_FACTORY_ADDRESS,
 ): Promise<VaultTopology> {
-  const v = getAddress(vault)
-  const f = getAddress(factoryAddress)
+  try {
+    const v = getAddress(vault)
+    const f = getAddress(factoryAddress)
 
-  // Get local EID from the factory on the queried chain
-  const localEid = await publicClient.readContract({
-    address: f,
-    abi: FACTORY_ABI,
-    functionName: 'localEid',
-  })
-
-  // Check if this vault is a hub on the current chain
-  const isHub = await publicClient.readContract({
-    address: f,
-    abi: FACTORY_ABI,
-    functionName: 'isCrossChainVault',
-    args: [localEid, v],
-  })
-
-  if (isHub) {
-    // Hub: get all registered spokes
-    const [spokeEids] = await publicClient.readContract({
+    // Get local EID from the factory on the queried chain
+    const localEid = await publicClient.readContract({
       address: f,
       abi: FACTORY_ABI,
-      functionName: 'hubToSpokes',
+      functionName: 'localEid',
+    })
+
+    // Check if this vault is a hub on the current chain
+    const isHub = await publicClient.readContract({
+      address: f,
+      abi: FACTORY_ABI,
+      functionName: 'isCrossChainVault',
       args: [localEid, v],
     })
 
+    if (isHub) {
+      // Hub: get all registered spokes
+      const [spokeEids] = await publicClient.readContract({
+        address: f,
+        abi: FACTORY_ABI,
+        functionName: 'hubToSpokes',
+        args: [localEid, v],
+      })
+
+      const localChainId = EID_TO_CHAIN_ID[localEid] ?? Number(publicClient.chain?.id ?? 0)
+      const spokeChainIds = (spokeEids as readonly number[])
+        .map(eid => EID_TO_CHAIN_ID[eid])
+        .filter((id): id is number => id !== undefined)
+
+      return { role: 'hub', hubChainId: localChainId, spokeChainIds }
+    }
+
+    // Check if this vault is a spoke on the current chain
+    const [hubEid, hubVault] = await publicClient.readContract({
+      address: f,
+      abi: FACTORY_ABI,
+      functionName: 'spokeToHub',
+      args: [localEid, v],
+    })
+
+    if (hubEid !== 0 && hubVault !== '0x0000000000000000000000000000000000000000') {
+      // Spoke: resolve hub chain + get all siblings from hub's factory
+      const hubChainId = EID_TO_CHAIN_ID[hubEid] ?? 0
+
+      // We only have the current chain's client — return what we know
+      // The hub's full spoke list requires a separate client for the hub chain
+      // (callers can pass a hub-chain client to get the full picture)
+      const spokeChainIds: number[] = []
+
+      // If we happen to know the hub EID mapping, include local chain as a spoke
+      const localChainId = EID_TO_CHAIN_ID[localEid]
+      if (localChainId !== undefined) spokeChainIds.push(localChainId)
+
+      return { role: 'spoke', hubChainId, spokeChainIds }
+    }
+
+    // Local vault — no cross-chain setup
     const localChainId = EID_TO_CHAIN_ID[localEid] ?? Number(publicClient.chain?.id ?? 0)
-    const spokeChainIds = (spokeEids as readonly number[])
-      .map(eid => EID_TO_CHAIN_ID[eid])
-      .filter((id): id is number => id !== undefined)
-
-    return { role: 'hub', hubChainId: localChainId, spokeChainIds }
+    return { role: 'local', hubChainId: localChainId, spokeChainIds: [] }
+  } catch (e: unknown) {
+    if (e instanceof MoreVaultsError) throw e
+    throw new MoreVaultsError('Failed to read vault topology. Ensure the vault address is correct and on a supported chain.')
   }
-
-  // Check if this vault is a spoke on the current chain
-  const [hubEid, hubVault] = await publicClient.readContract({
-    address: f,
-    abi: FACTORY_ABI,
-    functionName: 'spokeToHub',
-    args: [localEid, v],
-  })
-
-  if (hubEid !== 0 && hubVault !== '0x0000000000000000000000000000000000000000') {
-    // Spoke: resolve hub chain + get all siblings from hub's factory
-    const hubChainId = EID_TO_CHAIN_ID[hubEid] ?? 0
-
-    // We only have the current chain's client — return what we know
-    // The hub's full spoke list requires a separate client for the hub chain
-    // (callers can pass a hub-chain client to get the full picture)
-    const spokeChainIds: number[] = []
-
-    // If we happen to know the hub EID mapping, include local chain as a spoke
-    const localChainId = EID_TO_CHAIN_ID[localEid]
-    if (localChainId !== undefined) spokeChainIds.push(localChainId)
-
-    return { role: 'spoke', hubChainId, spokeChainIds }
-  }
-
-  // Local vault — no cross-chain setup
-  const localChainId = EID_TO_CHAIN_ID[localEid] ?? Number(publicClient.chain?.id ?? 0)
-  return { role: 'local', hubChainId: localChainId, spokeChainIds: [] }
 }
 
 /**
@@ -212,7 +218,7 @@ export async function discoverVaultTopology(
   if (publicClient) {
     try {
       const topo = await getVaultTopology(publicClient, v, factoryAddress)
-      if (topo.role !== 'local') {
+      if (topo.role === 'hub' || topo.role === 'spoke') {
         // Found hub or spoke — if spoke, resolve full topology from hub
         if (topo.role === 'spoke') {
           const hubClient = createChainClient(topo.hubChainId)
@@ -224,11 +230,14 @@ export async function discoverVaultTopology(
         }
         return topo
       }
+      // role === 'local' — vault exists on this chain as a single-chain vault
+      if (topo.hubChainId !== 0) return topo
       triedChainId = publicClient.chain?.id
     } catch { /* client failed — continue with discovery */ }
   }
 
-  // 2. Iterate all supported chains
+  // 2. Iterate all supported chains — prefer hub/spoke but remember local hits
+  let localFallback: VaultTopology | undefined
   for (const chainId of DISCOVERY_CHAIN_IDS) {
     if (chainId === triedChainId) continue
     const client = createChainClient(chainId)
@@ -247,11 +256,14 @@ export async function discoverVaultTopology(
         }
         return topo
       }
+      // role === 'local' — vault exists here as single-chain; keep as fallback
+      // hubChainId is set to the queried chain by getVaultTopology
+      if (!localFallback && topo.hubChainId !== 0) localFallback = topo
     } catch { /* this chain doesn't have the factory or vault — skip */ }
   }
 
-  // 3. Not found on any chain — return local with chainId 0
-  return { role: 'local', hubChainId: 0, spokeChainIds: [] }
+  // 3. Return local vault on the chain where it was found, or unknown
+  return localFallback ?? { role: 'local', hubChainId: 0, spokeChainIds: [] }
 }
 
 /**
@@ -259,7 +271,8 @@ export async function discoverVaultTopology(
  * Useful for showing a "Switch to Base" prompt before deposit.
  *
  * @param currentChainId  Chain ID the wallet is currently connected to
- * @param topology        Result of getVaultTopology
+ * @param topology        Result of getVaultTopology or discoverVaultTopology
+ * @returns               true if the wallet is already on the hub chain
  */
 export function isOnHubChain(currentChainId: number, topology: VaultTopology): boolean {
   return currentChainId === topology.hubChainId
@@ -267,6 +280,9 @@ export function isOnHubChain(currentChainId: number, topology: VaultTopology): b
 
 /**
  * Get all chain IDs where this vault is deployed (hub + all spokes).
+ *
+ * @param topology  Result of getVaultTopology or discoverVaultTopology
+ * @returns         Array starting with the hub chainId followed by all spoke chainIds
  */
 export function getAllVaultChainIds(topology: VaultTopology): number[] {
   return [topology.hubChainId, ...topology.spokeChainIds]

@@ -8,6 +8,7 @@
 import { Contract } from "ethers";
 import type { Provider } from "ethers";
 import { EID_TO_CHAIN_ID, CHAIN_IDS, createChainProvider } from "./chains";
+import { MoreVaultsError } from "./errors";
 
 // MoreVaults OMNI factory — same address on every supported chain (CREATE3)
 export const OMNI_FACTORY_ADDRESS = "0x7bDB8B17604b03125eFAED33cA0c55FBf856BB0C";
@@ -127,6 +128,8 @@ export async function getVaultTopology(
  * @param hubChainProvider  Provider connected to the hub chain
  * @param vault             Vault address
  * @param factoryAddress    MoreVaults factory (defaults to OMNI_FACTORY_ADDRESS)
+ * @returns                 Full VaultTopology with role='hub' and all registered spoke chain IDs
+ * @throws {MoreVaultsError} If the provider is not connected to the hub chain
  */
 export async function getFullVaultTopology(
   hubChainProvider: Provider,
@@ -135,7 +138,7 @@ export async function getFullVaultTopology(
 ): Promise<VaultTopology> {
   const topo = await getVaultTopology(hubChainProvider, vault, factoryAddress);
   if (topo.role !== "hub") {
-    throw new Error(
+    throw new MoreVaultsError(
       `getFullVaultTopology: provider must be connected to the hub chain (${topo.hubChainId}), ` +
         `but got role="${topo.role}". Connect to chainId ${topo.hubChainId} instead.`,
     );
@@ -177,7 +180,7 @@ export async function discoverVaultTopology(
   if (provider) {
     try {
       const topo = await getVaultTopology(provider, vault, factoryAddress);
-      if (topo.role !== "local") {
+      if (topo.role === "hub" || topo.role === "spoke") {
         // Found hub or spoke — if spoke, resolve full topology from hub
         if (topo.role === "spoke") {
           const hubProvider = createChainProvider(topo.hubChainId);
@@ -189,13 +192,15 @@ export async function discoverVaultTopology(
         }
         return topo;
       }
-      // Determine which chainId we just tried
+      // role === 'local' — vault exists on this chain as a single-chain vault
+      if (topo.hubChainId !== 0) return topo;
       const network = await provider.getNetwork();
       triedChainId = Number(network.chainId);
     } catch { /* provider failed — continue with discovery */ }
   }
 
-  // 2. Iterate all supported chains
+  // 2. Iterate all supported chains — prefer hub/spoke but remember local hits
+  let localFallback: VaultTopology | undefined;
   for (const chainId of DISCOVERY_CHAIN_IDS) {
     if (chainId === triedChainId) continue;
     const chainProvider = createChainProvider(chainId);
@@ -214,11 +219,13 @@ export async function discoverVaultTopology(
         }
         return topo;
       }
+      // role === 'local' — vault exists here as single-chain; keep as fallback
+      if (!localFallback && topo.hubChainId !== 0) localFallback = topo;
     } catch { /* this chain doesn't have the factory or vault — skip */ }
   }
 
-  // 3. Not found on any chain — return local with chainId 0
-  return { role: "local", hubChainId: 0, spokeChainIds: [] };
+  // 3. Return local vault on the chain where it was found, or unknown
+  return localFallback ?? { role: "local", hubChainId: 0, spokeChainIds: [] };
 }
 
 /**
@@ -227,6 +234,7 @@ export async function discoverVaultTopology(
  *
  * @param currentChainId  Chain ID the wallet is currently connected to
  * @param topology        Result of getVaultTopology
+ * @returns               true if the wallet is on the hub chain
  */
 export function isOnHubChain(currentChainId: number, topology: VaultTopology): boolean {
   return currentChainId === topology.hubChainId;
@@ -234,6 +242,9 @@ export function isOnHubChain(currentChainId: number, topology: VaultTopology): b
 
 /**
  * Get all chain IDs where this vault is deployed (hub + all spokes).
+ *
+ * @param topology  VaultTopology from getVaultTopology or getFullVaultTopology
+ * @returns         Array of chain IDs with the hub first, followed by spoke chain IDs
  */
 export function getAllVaultChainIds(topology: VaultTopology): number[] {
   return [topology.hubChainId, ...topology.spokeChainIds];
