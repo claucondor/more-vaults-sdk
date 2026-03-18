@@ -3,6 +3,7 @@ import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
 import { OFT_ABI, ERC20_ABI } from './abis'
 import { getVaultTopology } from './topology'
 import { isAsyncMode, quoteLzFee } from './utils'
+import { MoreVaultsError } from './errors.js'
 
 export interface OutboundRoute {
   /** Chain ID where user can receive shares/assets */
@@ -64,14 +65,24 @@ const PUBLIC_RPCS: Partial<Record<number, string[]>> = {
 // multicall3 is deployed at the same deterministic address on all supported chains
 const MULTICALL3_ADDRESS = '0xcA11bde05977b3631167028862bE2a173976CA11' as const
 
-/** Returns a viem transport (factory) for a given chain ID, or null if not supported */
+/**
+ * Create a viem transport for a given chain ID using the configured public RPCs.
+ *
+ * @param chainId  EVM chain ID
+ * @returns        A viem fallback transport, or null if the chain is not supported
+ */
 export function createChainTransport(chainId: number) {
   const rpcs = PUBLIC_RPCS[chainId]
   if (!rpcs?.length) return null
   return rpcs.length === 1 ? http(rpcs[0]) : fallback(rpcs.map(url => http(url)))
 }
 
-/** Create a public client with fallback transport for a given chain ID */
+/**
+ * Create a viem PublicClient with fallback transport for a given chain ID.
+ *
+ * @param chainId  EVM chain ID — must be present in PUBLIC_RPCS
+ * @returns        A configured PublicClient, or null if the chain is not supported
+ */
 export function createChainClient(chainId: number) {
   const rpcs = PUBLIC_RPCS[chainId]
   if (!rpcs?.length) return null
@@ -166,6 +177,7 @@ export interface InboundRouteWithBalance extends InboundRoute {
  * @param vault        Vault address (to resolve registered spoke chains)
  * @param vaultAsset   vault.asset() address on the hub chain
  * @param userAddress  User address (used as receiver for fee quote)
+ * @returns            Array of InboundRoute objects; hub direct route is first (if present)
  */
 export async function getInboundRoutes(
   hubChainId: number,
@@ -174,11 +186,11 @@ export async function getInboundRoutes(
   userAddress: Address,
 ): Promise<InboundRoute[]> {
   const hubEid = CHAIN_ID_TO_EID[hubChainId]
-  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
+  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`)
 
   // Fetch vault topology to get registered spoke chains
   const hubClient = createChainClient(hubChainId)
-  if (!hubClient) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
+  if (!hubClient) throw new MoreVaultsError(`No public RPC for hub chainId ${hubChainId}`)
   const topology = await getVaultTopology(hubClient, vault)
   const registeredSpokes = new Set(topology.spokeChainIds)
 
@@ -283,6 +295,27 @@ export async function getInboundRoutes(
       lzFeeEstimate,
       nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
     })
+  } else {
+    // No OFT route for the vault asset on the hub chain — still add a direct deposit route.
+    // This covers local (single-chain) vaults and any hub-chain token not in OFT_ROUTES.
+    // Users just need to approve the token and call deposit() directly, no LZ fee required.
+    const hubTokenAddr = getAddress(vaultAsset)
+    const [sourceTokenSymbol, lzFeeEstimate] = await Promise.all([
+      readTokenSymbol(hubClient, hubTokenAddr, 'UNKNOWN'),
+      asyncMode ? quoteLzFee(hubClient, vault) : Promise.resolve(0n),
+    ])
+    results.unshift({
+      symbol:           sourceTokenSymbol,
+      spokeChainId:     hubChainId,
+      depositType:      asyncMode ? 'direct-async' : 'direct',
+      spokeOft:         null,
+      spokeToken:       hubTokenAddr,
+      sourceTokenSymbol,
+      hubOft:           null,
+      oftCmd:           '0x',
+      lzFeeEstimate,
+      nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
+    })
   }
 
   return results
@@ -290,7 +323,13 @@ export async function getInboundRoutes(
 
 /**
  * Fetch user token balances for each inbound route in parallel.
- * Routes with native ETH as token (zeroAddress) return the chain's ETH balance.
+ *
+ * Routes with native token as the source (zeroAddress) return the chain's
+ * native gas balance instead of an ERC-20 balance.
+ *
+ * @param routes       Array of InboundRoute objects from getInboundRoutes
+ * @param userAddress  User wallet address to query balances for
+ * @returns            Each route extended with the user's current token balance
  */
 export async function getUserBalancesForRoutes(
   routes: InboundRoute[],
@@ -332,16 +371,17 @@ export async function getUserBalancesForRoutes(
  *
  * @param hubChainId  Chain ID of the vault hub (e.g. 8453 for Base)
  * @param vault       Vault address (to resolve registered spoke chains)
+ * @returns           Array of OutboundRoute objects; hub is always at index 0
  */
 export async function getOutboundRoutes(
   hubChainId: number,
   vault: Address,
 ): Promise<OutboundRoute[]> {
   const hubEid = CHAIN_ID_TO_EID[hubChainId]
-  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
+  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`)
 
   const hubClient = createChainClient(hubChainId)
-  if (!hubClient) throw new Error(`No public RPC for hub chainId ${hubChainId}`)
+  if (!hubClient) throw new MoreVaultsError(`No public RPC for hub chainId ${hubChainId}`)
 
   const topology = await getVaultTopology(hubClient, vault)
 
@@ -390,12 +430,12 @@ export async function quoteRouteDepositFee(
   if (route.depositType === 'direct') return 0n
 
   const hubEid = CHAIN_ID_TO_EID[hubChainId]
-  if (!hubEid) throw new Error(`No LZ EID for hub chainId ${hubChainId}`)
+  if (!hubEid) throw new MoreVaultsError(`No LZ EID for hub chainId ${hubChainId}`)
 
-  if (!route.spokeOft) throw new Error('Route is oft-compose but spokeOft is null')
+  if (!route.spokeOft) throw new MoreVaultsError('Route is oft-compose but spokeOft is null')
 
   const client = createChainClient(route.spokeChainId)
-  if (!client) throw new Error(`No public RPC for spoke chainId ${route.spokeChainId}`)
+  if (!client) throw new MoreVaultsError(`No public RPC for spoke chainId ${route.spokeChainId}`)
 
   const receiverBytes32 = `0x${getAddress(userAddress).slice(2).padStart(64, '0')}` as `0x${string}`
   const fee = await client.readContract({
