@@ -58,15 +58,16 @@ export function getRouteTokenDecimals(symbol: string): number {
 export function useInboundRoutes(
   hubChainId: number | undefined,
   vault: Address | undefined,
-  vaultAsset: Address | undefined,
+  vaultAsset: Address | Address[] | undefined,
   userAddress: Address | undefined,
 ): UseInboundRoutesReturn {
-  const enabled = hubChainId != null && !!vault && !!vaultAsset && !!userAddress
+  const hasAsset = Array.isArray(vaultAsset) ? vaultAsset.length > 0 : !!vaultAsset
+  const enabled = hubChainId != null && !!vault && hasAsset && !!userAddress
 
   const { data, isLoading, error } = useQuery<InboundRouteWithBalance[], Error>({
     queryKey: ['inboundRoutes', hubChainId, vault, vaultAsset, userAddress],
     queryFn: async () => {
-      const routes = await getInboundRoutes(hubChainId!, vault!, vaultAsset!, userAddress!)
+      const routes = await getInboundRoutes(hubChainId!, vault!, vaultAsset as Address | Address[], userAddress!)
       return getUserBalancesForRoutes(routes, userAddress!)
     },
     enabled,
