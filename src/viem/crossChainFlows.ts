@@ -17,6 +17,11 @@ import { createChainClient } from './spokeRoutes'
 import { ComposerNotConfiguredError, InvalidInputError } from './errors'
 import { parseContractError } from './errorParser'
 
+/** Returns true if the error is a LZ NativeDropAmountCap revert (0x0084ce02). */
+function isNativeDropCapError(e: unknown): boolean {
+  return String(e).includes('0x0084ce02')
+}
+
 /** LZ Endpoint V2 address — same on all EVM chains */
 const LZ_ENDPOINT = '0x1a44076050125825900e736c501f859c50fe728c' as const
 
@@ -92,9 +97,16 @@ async function resolveComposeNativeValue(
 
   const readFee = readFeeResult.status === 'fulfilled' ? readFeeResult.value as bigint : 0n
 
-  if (shareOftResult.status === 'fulfilled') {
+  if (readFeeResult.status === 'rejected') {
+    console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteAccountingFee failed', readFeeResult.reason)
+  }
+
+  if (shareOftResult.status === 'rejected') {
+    console.warn('[more-vaults-sdk] resolveComposeNativeValue: SHARE_OFT() failed on composer', composerAddress, shareOftResult.reason)
+  } else {
     try {
       const shareOft = shareOftResult.value as Address
+      console.warn('[more-vaults-sdk] resolveComposeNativeValue: calling quoteSend on', shareOft, 'dstEid', spokeEid)
       const feeQuote = await hubClient.readContract({
         address: shareOft,
         abi: OFT_ABI,
@@ -109,11 +121,15 @@ async function resolveComposeNativeValue(
           oftCmd: '0x' as `0x${string}`,
         }, false],
       }) as { nativeFee: bigint }
+      console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteSend ok', feeQuote.nativeFee)
       return readFee + feeQuote.nativeFee
-    } catch { /* fall through to default */ }
+    } catch (e) {
+      console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteSend failed, using fallback', e)
+    }
   }
 
   // Fallback: readFee covers _initDeposit; multiply for share send buffer
+  console.warn('[more-vaults-sdk] resolveComposeNativeValue: using fallback readFee*5 =', readFee * 5n)
   return readFee > 0n ? readFee * 5n : 500_000_000_000_000n // 0.0005 ETH floor
 }
 
@@ -303,6 +319,25 @@ export async function depositFromSpoke(
     [hopSendParam, minMsgValue],
   )
 
+  // Probe: for non-Stargate OFTs that carry lzCompose native drop, verify the OFT's
+  // executor config allows the native drop amount. If the executor cap is too low
+  // (NativeDropAmountCap error 0x0084ce02), fall back to extraOptions='0x' and use
+  // the same pending-compose flow as Stargate — the user executes TX2 via executeCompose().
+  let needsPendingCompose = isStargate
+  if (!isStargate && resolvedExtraOptions !== '0x') {
+    try {
+      await publicClient.readContract({
+        address: oft, abi: OFT_ABI, functionName: 'quoteSend',
+        args: [{ dstEid: hubEid, to: composerBytes32, amountLD: amount, minAmountLD: amount, extraOptions: resolvedExtraOptions, composeMsg: composeMsgBytes, oftCmd: resolvedOftCmd }, false],
+      })
+    } catch (e) {
+      if (isNativeDropCapError(e)) {
+        resolvedExtraOptions = '0x'
+        needsPendingCompose = true
+      }
+    }
+  }
+
   // For OFTAdapters (e.g. Stargate) fees are deducted on transfer — quoteOFT tells us
   // exactly how much arrives on the hub. Use that as minAmountLD so the tx never reverts
   // due to slippage unless the caller explicitly sets a tighter limit.
@@ -370,13 +405,13 @@ export async function depositFromSpoke(
     chain: walletClient.chain,
   })
 
-  // For Stargate OFTs: return compose data so the user can execute TX2 on the hub.
+  // For Stargate OFTs OR non-Stargate OFTs where native drop exceeds the executor cap:
+  // return compose data so the user can execute TX2 on the hub.
   // The compose message is NOT available yet — it's emitted as ComposeSent on the hub
   // after LZ delivers the message. The user must call waitForCompose() to get it,
   // then executeCompose() to execute it.
-  const stargate = isStargate
   let composeData: ComposeData | undefined
-  if (stargate) {
+  if (needsPendingCompose) {
     // Snapshot current hub block BEFORE waiting — this is exactly where we start
     // searching for ComposeSent events later. No guessing block ranges.
     const hubBlockStart = await hubClient.getBlockNumber()
@@ -387,7 +422,7 @@ export async function depositFromSpoke(
       guid: guid!,
       index: 0,
       message: '0x', // resolved by waitForCompose — from ComposeSent event
-      isStargate: true,
+      isStargate,
       hubChainId,
       hubBlockStart,
     }
@@ -508,12 +543,17 @@ export async function quoteDepositFromSpokeFee(
     oftCmd: resolvedOftCmd,
   }
 
-  const fee = await publicClient.readContract({
-    address: oft,
-    abi: OFT_ABI,
-    functionName: 'quoteSend',
-    args: [sendParam, false],
-  })
+  // If native drop exceeds the executor cap, retry without native drop (pending compose flow).
+  let fee: unknown
+  try {
+    fee = await publicClient.readContract({ address: oft, abi: OFT_ABI, functionName: 'quoteSend', args: [sendParam, false] })
+  } catch (e) {
+    if (isNativeDropCapError(e)) {
+      fee = await publicClient.readContract({ address: oft, abi: OFT_ABI, functionName: 'quoteSend', args: [{ ...sendParam, extraOptions: '0x' as `0x${string}` }, false] })
+    } else {
+      throw e
+    }
+  }
 
   return (fee as { nativeFee: bigint; lzTokenFee: bigint }).nativeFee
 }

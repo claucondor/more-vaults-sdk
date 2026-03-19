@@ -18,6 +18,16 @@ scripts/check-share-oft.ts
 scripts/check-arb-share-oft.ts
 scripts/find-arb-share-oft.ts
 scripts/transfer-arb-share-oft-owner.ts
+scripts/find-lz-endpoint.ts
+scripts/check-share-oft-quote.ts
+scripts/configure-share-ofts.ts
+scripts/fix-share-oft-options.ts
+scripts/configure-share-oft-lz-config.ts
+scripts/check-asset.ts
+scripts/check-peers.ts
+scripts/check-pyusd-oft-peer.ts
+scripts/check-shares.ts
+scripts/check-shares2.ts
 sdk_more_miercoles.txt
 CROSS_CHAIN_UX_OPTIONS.md
 CURATOR_SDK_PLAN.md
