@@ -656,36 +656,34 @@ export async function waitForCompose(
               args.to && getAddress(args.to) === composer &&
               args.message?.toLowerCase().includes(receiverNeedle)
             ) {
-              // Verify this compose is still pending in composeQueue
-              try {
-                const hash = await hubPublicClient.readContract({
-                  address: endpoint,
-                  abi: LZ_ENDPOINT_ABI,
-                  functionName: 'composeQueue',
-                  args: [getAddress(args.from!), composer, args.guid!, args.index ?? 0],
-                })
+              // Verify this compose is still pending in composeQueue.
+              // Let the error propagate to the outer catch so scannedUpTo
+              // does NOT advance — the chunk will be retried next poll.
+              const hash = await hubPublicClient.readContract({
+                address: endpoint,
+                abi: LZ_ENDPOINT_ABI,
+                functionName: 'composeQueue',
+                args: [getAddress(args.from!), composer, args.guid!, args.index ?? 0],
+              })
 
-                if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
-                  console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
-                  return {
-                    ...composeData,
-                    from: getAddress(args.from!),
-                    to: composer,
-                    guid: args.guid!,
-                    index: args.index ?? 0,
-                    message: args.message!,
-                  }
+              if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+                console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
+                return {
+                  ...composeData,
+                  from: getAddress(args.from!),
+                  to: composer,
+                  guid: args.guid!,
+                  index: args.index ?? 0,
+                  message: args.message!,
                 }
-              } catch {
-                // composeQueue call failed — treat as not-yet-confirmed, retry next poll
               }
             }
           }
 
-          // Only advance scannedUpTo after a chunk fully succeeds
+          // Only advance scannedUpTo after getLogs + composeQueue all succeed
           scannedUpTo = chunkEnd
         } catch {
-          // getLogs failed (RPC limit) — stop scanning, retry from this block next poll
+          // Any failure (getLogs or composeQueue) — retry this chunk next poll
           break
         }
 
