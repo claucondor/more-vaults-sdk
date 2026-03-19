@@ -613,6 +613,12 @@ export async function waitForCompose(
   // Track the highest block we've already scanned to avoid re-scanning
   let scannedUpTo = startBlock - 1n
 
+  // Log chain info once so we can verify the client is on the right network
+  try {
+    const chainId = await hubPublicClient.getChainId()
+    console.log(`[more-vaults-sdk] waitForCompose starting — chainId=${chainId} endpoint=${endpoint} composer=${composer} startBlock=${startBlock} receiver=0x${receiverNeedle}`)
+  } catch { /* non-fatal */ }
+
   while (Date.now() < deadline) {
     attempt++
     const elapsed = Math.round((Date.now() - (deadline - timeoutMs)) / 1000)
