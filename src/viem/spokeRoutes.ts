@@ -99,6 +99,7 @@ export function createChainClient(chainId: number) {
 }
 
 const SYMBOL_ABI = [{ name: 'symbol', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'string' }] }] as const
+const DECIMALS_ABI = [{ name: 'decimals', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint8' }] }] as const
 
 /** Read ERC20 symbol() on-chain. Falls back to `fallback` if the call fails. */
 async function readTokenSymbol(client: ReturnType<typeof createChainClient>, token: Address, fallbackSymbol: string): Promise<string> {
@@ -107,6 +108,16 @@ async function readTokenSymbol(client: ReturnType<typeof createChainClient>, tok
     return await client.readContract({ address: token, abi: SYMBOL_ABI, functionName: 'symbol' })
   } catch {
     return fallbackSymbol
+  }
+}
+
+/** Read ERC20 decimals() on-chain. Falls back to 18 if the call fails. */
+async function readTokenDecimals(client: ReturnType<typeof createChainClient>, token: Address): Promise<number> {
+  if (!client) return 18
+  try {
+    return await client.readContract({ address: token, abi: DECIMALS_ABI, functionName: 'decimals' })
+  } catch {
+    return 18
   }
 }
 
@@ -157,6 +168,8 @@ export interface InboundRoute {
   lzFeeEstimate: bigint
   /** Native gas token symbol for the spoke chain — use this when displaying the fee */
   nativeSymbol: string
+  /** Decimals of spokeToken — use this with formatUnits(userBalance, decimals) */
+  decimals: number
 }
 
 export interface InboundRouteWithBalance extends InboundRoute {
@@ -203,7 +216,7 @@ async function _getRoutesForAsset(
         try {
           const receiverBytes32 = `0x${getAddress(userAddress).slice(2).padStart(64, '0')}` as `0x${string}`
           const spokeTokenAddr = getAddress(spokeEntry.token) as Address
-          const [fee, sourceTokenSymbol] = await Promise.all([
+          const [fee, sourceTokenSymbol, decimals] = await Promise.all([
             client.readContract({
               address: getAddress(spokeEntry.oft) as Address,
               abi: OFT_ABI,
@@ -219,6 +232,7 @@ async function _getRoutesForAsset(
               }, false],
             }),
             readTokenSymbol(client, spokeTokenAddr, symbol),
+            readTokenDecimals(client, spokeTokenAddr),
           ])
           results.push({
             symbol,
@@ -231,6 +245,7 @@ async function _getRoutesForAsset(
             oftCmd,
             lzFeeEstimate:    fee.nativeFee,
             nativeSymbol:     NATIVE_SYMBOL[spokeChainId] ?? 'ETH',
+            decimals,
           })
         } catch { /* route not available — skip */ }
       })
@@ -249,9 +264,10 @@ async function _getRoutesForAsset(
   if (hubOftEntry) {
     const { symbol, hubEntry } = hubOftEntry
     const hubTokenAddr = getAddress(hubEntry.token) as Address
-    const [sourceTokenSymbol, lzFeeEstimate] = await Promise.all([
+    const [sourceTokenSymbol, lzFeeEstimate, decimals] = await Promise.all([
       readTokenSymbol(hubClient!, hubTokenAddr, symbol),
       asyncMode ? quoteLzFee(hubClient!, vault) : Promise.resolve(0n),
+      readTokenDecimals(hubClient!, hubTokenAddr),
     ])
     results.unshift({
       symbol,
@@ -264,13 +280,15 @@ async function _getRoutesForAsset(
       oftCmd:           '0x',
       lzFeeEstimate,
       nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
+      decimals,
     })
   } else {
     // No OFT route — direct deposit with the token as-is (local vaults, non-OFT tokens)
     const hubTokenAddr = asset
-    const [sourceTokenSymbol, lzFeeEstimate] = await Promise.all([
+    const [sourceTokenSymbol, lzFeeEstimate, decimals] = await Promise.all([
       readTokenSymbol(hubClient!, hubTokenAddr, 'UNKNOWN'),
       asyncMode ? quoteLzFee(hubClient!, vault) : Promise.resolve(0n),
+      readTokenDecimals(hubClient!, hubTokenAddr),
     ])
     results.unshift({
       symbol:           sourceTokenSymbol,
@@ -283,6 +301,7 @@ async function _getRoutesForAsset(
       oftCmd:           '0x',
       lzFeeEstimate,
       nativeSymbol:     NATIVE_SYMBOL[hubChainId] ?? 'ETH',
+      decimals,
     })
   }
 

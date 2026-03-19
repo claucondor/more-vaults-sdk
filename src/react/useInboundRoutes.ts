@@ -12,14 +12,15 @@ interface UseInboundRoutesReturn {
 /**
  * Return the decimals typically used by a route's token symbol.
  *
- * Useful for formatting `userBalance` (a bigint in the token's smallest unit)
- * into a human-readable string.
+ * @deprecated Use `route.decimals` instead — it is read directly from the
+ * token contract and is always accurate. This helper uses a static lookup
+ * table and may return wrong values for tokens not in the list.
  *
  * @example
  * ```ts
  * import { formatUnits } from 'viem'
- * const decimals = getRouteTokenDecimals(route.symbol)
- * const formatted = formatUnits(route.userBalance, decimals)
+ * // Preferred:
+ * const formatted = formatUnits(route.userBalance, route.decimals)
  * ```
  */
 export function getRouteTokenDecimals(symbol: string): number {
@@ -27,6 +28,8 @@ export function getRouteTokenDecimals(symbol: string): number {
     case 'stgUSDC':
     case 'USDT':
     case 'USDC':
+    case 'PYUSD':
+    case 'PYUSD0':
       return 6
     default:
       return 18
