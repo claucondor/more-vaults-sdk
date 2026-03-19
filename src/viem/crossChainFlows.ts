@@ -52,13 +52,14 @@ const COMPOSER_ABI = [
  *   - D6 (oracle ON):  `SHARE_OFT.send{value: msg.value}(...)` — hub→spoke share return
  *   - D7 (oracle OFF): `initVaultActionRequest{value: readFee}(...)` + stored for share return
  *
- * Encoding (LZ V2 executor options spec):
- *   [uint16 TYPE_3=3][uint8 type=3][uint16 length=34][uint16 index=0][uint128 gas][uint128 value]
+ * Encoding (LZ V2 executor options spec, per OptionsBuilder.sol):
+ *   [uint16 TYPE_3=0x0003][uint8 workerId=0x01][uint16 size=0x0023][uint8 optionType=0x03][uint16 index=0x0000][uint128 gas][uint128 value]
+ *   size = 1(optionType) + 2(index) + 16(gas) + 16(value) = 35 = 0x23
  */
 function buildLzComposeOption(gas: bigint, nativeValue: bigint): `0x${string}` {
   const gasHex = gas.toString(16).padStart(32, '0')
   const valueHex = nativeValue.toString(16).padStart(32, '0')
-  return `0x00030300220000${gasHex}${valueHex}` as `0x${string}`
+  return `0x0003010023030000${gasHex}${valueHex}` as `0x${string}`
 }
 
 /**
