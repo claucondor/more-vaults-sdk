@@ -645,17 +645,20 @@ export async function waitForCompose(
             toBlock: chunkEnd,
           })
 
+          console.log(`[more-vaults-sdk] waitForCompose chunk ${from}→${chunkEnd}: ${logs.length} ComposeSent log(s)`)
+
           for (const log of logs) {
             const args = log.args as {
               from?: Address; to?: Address; guid?: `0x${string}`;
               index?: number; message?: `0x${string}`
             }
 
+            const toMatch = args.to ? getAddress(args.to) === composer : false
+            const msgMatch = args.message?.toLowerCase().includes(receiverNeedle) ?? false
+            console.log(`[more-vaults-sdk] waitForCompose log @ block ${log.blockNumber}: to_match=${toMatch} msg_match=${msgMatch} from=${args.from}`)
+
             // Match by: composer address AND receiver in the message body
-            if (
-              args.to && getAddress(args.to) === composer &&
-              args.message?.toLowerCase().includes(receiverNeedle)
-            ) {
+            if (toMatch && msgMatch) {
               // Verify this compose is still pending in composeQueue.
               // Let the error propagate to the outer catch so scannedUpTo
               // does NOT advance — the chunk will be retried next poll.
@@ -665,6 +668,8 @@ export async function waitForCompose(
                 functionName: 'composeQueue',
                 args: [getAddress(args.from!), composer, args.guid!, args.index ?? 0],
               })
+
+              console.log(`[more-vaults-sdk] waitForCompose composeQueue hash=${hash} empty=${hash === EMPTY_HASH} received=${hash === RECEIVED_HASH}`)
 
               if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
                 console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
@@ -682,8 +687,9 @@ export async function waitForCompose(
 
           // Only advance scannedUpTo after getLogs + composeQueue all succeed
           scannedUpTo = chunkEnd
-        } catch {
+        } catch (e) {
           // Any failure (getLogs or composeQueue) — retry this chunk next poll
+          console.log(`[more-vaults-sdk] waitForCompose chunk ${from}→${chunkEnd} failed, will retry:`, String(e).slice(0, 120))
           break
         }
 
