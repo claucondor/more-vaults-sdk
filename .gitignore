@@ -6,5 +6,18 @@ tests/addresses.json
 .npmrc
 _*.ts
 TO_ANALYZE.md
+
+# one-off rescue / diagnostic scripts (kept locally, not published)
+scripts/rescue-share-oft-arb.ts
+scripts/diagnose-share-oft-arb.ts
+scripts/trace-rescue-tx.ts
+scripts/eip7702-rescue-arb.ts
+scripts/drain-compromised-wallet.ts
+scripts/check-delegate.ts
+scripts/check-share-oft.ts
+scripts/check-arb-share-oft.ts
+scripts/find-arb-share-oft.ts
+scripts/transfer-arb-share-oft-owner.ts
+sdk_more_miercoles.txt
 CROSS_CHAIN_UX_OPTIONS.md
 CURATOR_SDK_PLAN.md
