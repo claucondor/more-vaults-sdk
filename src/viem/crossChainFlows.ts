@@ -22,8 +22,17 @@ function isNativeDropCapError(e: unknown): boolean {
   return String(e).includes('0x0084ce02')
 }
 
-/** LZ Endpoint V2 address — same on all EVM chains */
+/** LZ Endpoint V2 address — standard deployment, used on most EVM chains */
 const LZ_ENDPOINT = '0x1a44076050125825900e736c501f859c50fe728c' as const
+
+/** Chain-specific LZ Endpoint overrides (some chains deploy at a different address) */
+const LZ_ENDPOINT_BY_CHAIN: Record<number, `0x${string}`> = {
+  747: '0xcb566e3B6934Fa77258d68ea18E931fa75e1aaAa', // Flow EVM
+}
+
+function getLzEndpoint(chainId: number): `0x${string}` {
+  return LZ_ENDPOINT_BY_CHAIN[chainId] ?? LZ_ENDPOINT
+}
 
 const FACTORY_COMPOSER_ABI = [
   {
@@ -416,7 +425,7 @@ export async function depositFromSpoke(
     // searching for ComposeSent events later. No guessing block ranges.
     const hubBlockStart = await hubClient.getBlockNumber()
     composeData = {
-      endpoint: LZ_ENDPOINT,
+      endpoint: getLzEndpoint(hubChainId),
       from: zeroAddress, // resolved by waitForCompose — Stargate pool on hub
       to: composerAddress,
       guid: guid!,
