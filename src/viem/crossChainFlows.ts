@@ -657,35 +657,40 @@ export async function waitForCompose(
               args.message?.toLowerCase().includes(receiverNeedle)
             ) {
               // Verify this compose is still pending in composeQueue
-              const hash = await hubPublicClient.readContract({
-                address: endpoint,
-                abi: LZ_ENDPOINT_ABI,
-                functionName: 'composeQueue',
-                args: [getAddress(args.from!), composer, args.guid!, args.index ?? 0],
-              })
+              try {
+                const hash = await hubPublicClient.readContract({
+                  address: endpoint,
+                  abi: LZ_ENDPOINT_ABI,
+                  functionName: 'composeQueue',
+                  args: [getAddress(args.from!), composer, args.guid!, args.index ?? 0],
+                })
 
-              if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
-                console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
-                return {
-                  ...composeData,
-                  from: getAddress(args.from!),
-                  to: composer,
-                  guid: args.guid!,
-                  index: args.index ?? 0,
-                  message: args.message!,
+                if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+                  console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
+                  return {
+                    ...composeData,
+                    from: getAddress(args.from!),
+                    to: composer,
+                    guid: args.guid!,
+                    index: args.index ?? 0,
+                    message: args.message!,
+                  }
                 }
+              } catch {
+                // composeQueue call failed — treat as not-yet-confirmed, retry next poll
               }
             }
           }
+
+          // Only advance scannedUpTo after a chunk fully succeeds
+          scannedUpTo = chunkEnd
         } catch {
-          // Chunk failed (RPC limit) — skip, will retry next poll
+          // getLogs failed (RPC limit) — stop scanning, retry from this block next poll
           break
         }
 
         from = chunkEnd + 1n
       }
-
-      scannedUpTo = currentBlock
     } catch {
       // getBlockNumber failed — retry next poll
     }
