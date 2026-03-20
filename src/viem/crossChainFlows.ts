@@ -16,6 +16,7 @@ import { OMNI_FACTORY_ADDRESS } from './topology'
 import { createChainClient } from './spokeRoutes'
 import { ComposerNotConfiguredError, InvalidInputError } from './errors'
 import { parseContractError } from './errorParser'
+import { getDefaultStorage, saveDepositFlow, clearDepositFlow, type FlowStorage } from './flowStorage'
 
 /** Returns true if the error is a LZ NativeDropAmountCap revert (0x0084ce02). */
 function isNativeDropCapError(e: unknown): boolean {
@@ -229,6 +230,7 @@ export async function depositFromSpoke(
   minSharesOut: bigint = 0n,
   minAmountLD?: bigint,
   extraOptions: `0x${string}` = '0x',
+  options?: { storage?: FlowStorage | null },
 ): Promise<SpokeDepositResult> {
   const account = walletClient.account!
   const oft = getAddress(spokeOFT)
@@ -437,6 +439,23 @@ export async function depositFromSpoke(
     }
   }
 
+  // Checkpoint: persist spoke_sent state for crash recovery (D7 path only)
+  if (composeData) {
+    const storage = options?.storage !== undefined ? options.storage : getDefaultStorage()
+    if (storage) {
+      try {
+        await saveDepositFlow(storage, account.address, {
+          phase: 'spoke_sent',
+          txHash,
+          composeData: composeData as unknown as Record<string, unknown>,
+          startBlock: composeData.hubBlockStart.toString(),
+          vault: vault as string,
+          timestamp: Date.now(),
+        })
+      } catch { /* storage failure is non-fatal */ }
+    }
+  }
+
   return { txHash, guid: guid!, composeData }
 }
 
@@ -599,6 +618,7 @@ export async function waitForCompose(
   receiver: Address,
   pollIntervalMs = 20_000,
   timeoutMs = 1_800_000,
+  options?: { storage?: FlowStorage | null; walletAddress?: Address },
 ): Promise<ComposeData> {
   const deadline = Date.now() + timeoutMs
   const composer = getAddress(composeData.to)
@@ -688,7 +708,7 @@ export async function waitForCompose(
 
               if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
                 console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
-                return {
+                const fullComposeData = {
                   ...composeData,
                   from: getAddress(args.from!),
                   to: composer,
@@ -696,6 +716,20 @@ export async function waitForCompose(
                   index: args.index ?? 0,
                   message: args.message!,
                 }
+                // Checkpoint: persist compose_found state for crash recovery
+                if (options?.walletAddress) {
+                  const storage = options?.storage !== undefined ? options.storage : getDefaultStorage()
+                  if (storage) {
+                    try {
+                      await saveDepositFlow(storage, options.walletAddress, {
+                        phase: 'compose_found',
+                        composeData: fullComposeData as unknown as Record<string, unknown>,
+                        timestamp: Date.now(),
+                      })
+                    } catch { /* non-fatal */ }
+                  }
+                }
+                return fullComposeData
               }
             }
           }
@@ -850,6 +884,7 @@ export async function executeCompose(
   hubPublicClient: PublicClient,
   composeData: ComposeData,
   fee: bigint,
+  options?: { storage?: FlowStorage | null },
 ): Promise<{
   txHash: Hash
   /** Escrow async-request GUID — use with waitForAsyncRequest for finalization polling */
@@ -925,6 +960,23 @@ export async function executeCompose(
     }
   } catch {
     // Receipt timeout — guid will be undefined, caller can still poll by balance
+  }
+
+  // Checkpoint: persist hub_sent state for crash recovery
+  const execStorage = options?.storage !== undefined ? options.storage : getDefaultStorage()
+  if (execStorage) {
+    try {
+      await saveDepositFlow(execStorage, account.address, {
+        phase: 'hub_sent',
+        guid: guid ?? '',
+        vault: (tokensLocked?.vault ?? composeData.to) as string,
+        composerSentGuid,
+        tokensLocked: tokensLocked
+          ? { ...tokensLocked, amount: tokensLocked.amount.toString() }
+          : undefined,
+        timestamp: Date.now(),
+      })
+    } catch { /* non-fatal */ }
   }
 
   return { txHash, guid, composerSentGuid, tokensLocked }

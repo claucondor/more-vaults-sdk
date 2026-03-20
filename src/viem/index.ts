@@ -247,3 +247,7 @@ export {
 // with viem's PublicClient but TypeScript may complain without this cast helper.
 export type { PublicClient as SdkPublicClient } from 'viem'
 export { asSdkClient } from './wagmiCompat'
+
+// --- Flow persistence ---
+export type { FlowStorage, DepositFlowState } from './flowStorage'
+export { LocalStorageAdapter, getDefaultStorage, saveDepositFlow, loadDepositFlow, clearDepositFlow } from './flowStorage'

@@ -9,6 +9,7 @@ import {
 import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
 import { MoreVaultsError, CCManagerNotConfiguredError, AsyncRequestTimeoutError } from './errors.js'
+import { getDefaultStorage, clearDepositFlow, type FlowStorage } from './flowStorage'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TX receipt helper with retry — public RPCs can be slow, especially on Ethereum mainnet.
@@ -530,8 +531,10 @@ export async function waitForAsyncRequest(
   pollInterval: number = 30_000,
   timeout: number = 900_000,
   onPoll?: (status: { fulfilled: boolean; finalized: boolean; refunded: boolean; result: bigint }) => void,
+  options?: { storage?: FlowStorage | null; walletAddress?: Address },
 ): Promise<AsyncRequestFinalResult> {
   const deadline = Date.now() + timeout
+  const storage = options?.storage !== undefined ? options.storage : getDefaultStorage()
 
   while (Date.now() < deadline) {
     const status = await getAsyncRequestStatus(publicClient, vault, guid)
@@ -539,9 +542,15 @@ export async function waitForAsyncRequest(
     if (onPoll) onPoll(status)
 
     if (status.finalized) {
+      if (storage && options?.walletAddress) {
+        try { await clearDepositFlow(storage, options.walletAddress) } catch { /* non-fatal */ }
+      }
       return { status: 'completed', result: status.result }
     }
     if (status.refunded) {
+      if (storage && options?.walletAddress) {
+        try { await clearDepositFlow(storage, options.walletAddress) } catch { /* non-fatal */ }
+      }
       return { status: 'refunded', result: 0n }
     }
 
