@@ -818,10 +818,18 @@ export async function quoteComposeFee(
 }
 
 /**
- * Event topic0 emitted by the escrow when initVaultActionRequest creates a new request.
- * topic1 = GUID (bytes32). Used to extract the async request GUID from executeCompose receipts.
+ * MoreVaultsEscrow.TokensLocked(bytes32 guid, address vault, address token, uint256 amount, address owner)
+ * topic0 = keccak256("TokensLocked(bytes32,address,address,uint256,address)")
+ * topic1 = guid, topic2 = vault, topic3 = token, data = abi.encode(amount, owner)
  */
 const ESCROW_REQUEST_TOPIC = '0x304ac8b57de34b9e6118fb049ba362689cfcfab98c30c9d78e3e2e14be7e0972' as const
+
+/**
+ * MoreVaultsComposer.Sent(bytes32 guid)
+ * topic0 = keccak256("Sent(bytes32)")
+ * topic1 = guid — the LZ Read request guid (use for layerzeroscan tracking)
+ */
+const COMPOSER_SENT_TOPIC = '0x27b5aea9f5736c02241d8a0272e9ec988ea44cf85c4b4760329431aa19678394' as const
 
 /**
  * Execute a pending LZ compose on the hub chain (Stargate 2-TX flow, step 2).
@@ -834,7 +842,7 @@ const ESCROW_REQUEST_TOPIC = '0x304ac8b57de34b9e6118fb049ba362689cfcfab98c30c9d7
  * @param hubPublicClient  Public client on the HUB chain
  * @param composeData      Complete compose data (from waitForCompose or manual)
  * @param fee              ETH to send (from quoteComposeFee); covers readFee for D7
- * @returns                Transaction hash and optional async request GUID for D7 tracking
+ * @returns                Transaction hash, optional async request GUID, optional LZ Read guid, and optional tokens-locked info
  * @throws {ComposerNotConfiguredError} If compose is not found or already delivered
  */
 export async function executeCompose(
@@ -842,7 +850,15 @@ export async function executeCompose(
   hubPublicClient: PublicClient,
   composeData: ComposeData,
   fee: bigint,
-): Promise<{ txHash: Hash; guid?: `0x${string}` }> {
+): Promise<{
+  txHash: Hash
+  /** Escrow async-request GUID — use with waitForAsyncRequest for finalization polling */
+  guid?: `0x${string}`
+  /** LZ Read request GUID emitted by MoreVaultsComposer.Sent — use for layerzeroscan tracking */
+  composerSentGuid?: `0x${string}`
+  /** Tokens locked in escrow from this compose */
+  tokensLocked?: { guid: `0x${string}`; vault: `0x${string}`; token: `0x${string}`; amount: bigint }
+}> {
   const account = walletClient.account!
   const endpoint = getAddress(composeData.endpoint)
 
@@ -886,21 +902,30 @@ export async function executeCompose(
     gas: 5_000_000n, // initVaultActionRequest + LZ Read is gas-heavy
   })
 
-  // Parse the GUID from the escrow's event in the TX receipt.
-  // The composer calls initVaultActionRequest internally, which emits an event
-  // with topic1 = GUID. We need this GUID to poll finalization via waitForAsyncRequest.
+  // Parse events from the TX receipt.
+  // TokensLocked  → escrow guid (for waitForAsyncRequest) + vault/token/amount for display
+  // Composer.Sent → LZ Read request guid (for layerzeroscan tracking)
   let guid: `0x${string}` | undefined
+  let composerSentGuid: `0x${string}` | undefined
+  let tokensLocked: { guid: `0x${string}`; vault: `0x${string}`; token: `0x${string}`; amount: bigint } | undefined
   try {
     const receipt = await hubPublicClient.waitForTransactionReceipt({ hash: txHash, timeout: 60_000 })
     for (const log of receipt.logs) {
-      if (log.topics[0] === ESCROW_REQUEST_TOPIC && log.topics[1]) {
+      if (log.topics[0] === ESCROW_REQUEST_TOPIC && log.topics[1] && log.topics[2] && log.topics[3]) {
         guid = log.topics[1] as `0x${string}`
-        break
+        const vault = `0x${log.topics[2].slice(26)}` as `0x${string}`
+        const token = `0x${log.topics[3].slice(26)}` as `0x${string}`
+        // data = abi.encode(uint256 amount, address owner) — first 32 bytes is amount
+        const amount = log.data.length >= 66 ? BigInt(`0x${log.data.slice(2, 66)}`) : 0n
+        tokensLocked = { guid, vault, token, amount }
+      }
+      if (log.topics[0] === COMPOSER_SENT_TOPIC && log.topics[1]) {
+        composerSentGuid = log.topics[1] as `0x${string}`
       }
     }
   } catch {
     // Receipt timeout — guid will be undefined, caller can still poll by balance
   }
 
-  return { txHash, guid }
+  return { txHash, guid, composerSentGuid, tokensLocked }
 }
