@@ -37,6 +37,72 @@ const FACTORY_ABI = [
   },
 ] as const
 
+const OFT_FACTORY_ABI = [
+  {
+    name: 'MoreVaultsOftAdapterFactory',
+    type: 'function',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    name: 'MoreVaultsOftFactory',
+    type: 'function',
+    inputs: [],
+    outputs: [{ type: 'address' }],
+    stateMutability: 'view',
+  },
+  {
+    name: 'OFTs',
+    type: 'function',
+    inputs: [{ name: 'vault', type: 'address' }],
+    outputs: [{ type: 'address' }],
+    stateMutability: 'view',
+  },
+] as const
+
+async function _getOftFromFactory(
+  publicClient: PublicClient,
+  vault: Address,
+  factoryFn: 'MoreVaultsOftAdapterFactory' | 'MoreVaultsOftFactory',
+): Promise<Address | null> {
+  try {
+    const subFactoryAddr = await publicClient.readContract({
+      address: OMNI_FACTORY_ADDRESS,
+      abi: OFT_FACTORY_ABI,
+      functionName: factoryFn,
+    }) as Address
+
+    const oft = await publicClient.readContract({
+      address: subFactoryAddr,
+      abi: OFT_FACTORY_ABI,
+      functionName: 'OFTs',
+      args: [vault],
+    }) as Address
+
+    if (oft === '0x0000000000000000000000000000000000000000') return null
+    return getAddress(oft)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Resolve the share OFT adapter address for a vault on the hub chain.
+ * Uses VaultsFactory → MoreVaultsOftAdapterFactory.OFTs(vault).
+ */
+export function getHubShareOft(publicClient: PublicClient, vault: Address): Promise<Address | null> {
+  return _getOftFromFactory(publicClient, vault, 'MoreVaultsOftAdapterFactory')
+}
+
+/**
+ * Resolve the share OFT address for a vault on a spoke chain.
+ * Uses VaultsFactory → MoreVaultsOftFactory.OFTs(vault).
+ */
+export function getSpokeShareOft(publicClient: PublicClient, vault: Address): Promise<Address | null> {
+  return _getOftFromFactory(publicClient, vault, 'MoreVaultsOftFactory')
+}
+
 export interface VaultTopology {
   /**
    * Role of this vault on the chain you queried:

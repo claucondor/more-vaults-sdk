@@ -3,7 +3,7 @@ import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI, OFT_ABI, VA
 import type { CrossChainRequestInfo } from './types'
 import { getVaultStatus } from './utils'
 import type { VaultStatus } from './utils'
-import { discoverVaultTopology, OMNI_FACTORY_ADDRESS } from './topology'
+import { discoverVaultTopology, OMNI_FACTORY_ADDRESS, getSpokeShareOft, getHubShareOft } from './topology'
 import { createChainClient } from './spokeRoutes'
 import { CHAIN_ID_TO_EID } from './chains'
 import { MoreVaultsError } from './errors.js'
@@ -672,23 +672,10 @@ export async function getUserPositionMultiChain(
   const rawSpokeShares: Record<number, bigint> = {}
 
   if (topo.spokeChainIds.length > 0) {
-    // Get hub SHARE_OFT via factory → composer → SHARE_OFT
+    // Get hub SHARE_OFT via MoreVaultsOftAdapterFactory.OFTs(vault)
     let hubShareOft: Address | null = null
     try {
-      const composerAddress = await (hubClient as PublicClient).readContract({
-        address: OMNI_FACTORY_ADDRESS,
-        abi: FACTORY_COMPOSER_ABI,
-        functionName: 'vaultComposer',
-        args: [v],
-      }) as Address
-
-      if (composerAddress !== '0x0000000000000000000000000000000000000000') {
-        hubShareOft = await (hubClient as PublicClient).readContract({
-          address: composerAddress,
-          abi: COMPOSER_SHARE_OFT_ABI,
-          functionName: 'SHARE_OFT',
-        }) as Address
-      }
+      hubShareOft = await getHubShareOft(hubClient as PublicClient, v)
     } catch { /* no composer — skip spoke reads */ }
 
     if (hubShareOft) {
@@ -698,23 +685,15 @@ export async function getUserPositionMultiChain(
           const spokeEid = CHAIN_ID_TO_EID[spokeChainId]
           if (!spokeEid) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
 
-          // Get spoke SHARE_OFT address from hub peers()
-          const spokeOftBytes32 = await (hubClient as PublicClient).readContract({
-            address: hubShareOft!,
-            abi: OFT_ABI,
-            functionName: 'peers',
-            args: [spokeEid],
-          }) as `0x${string}`
-
-          const spokeOft = getAddress(`0x${spokeOftBytes32.slice(-40)}`) as Address
-          if (spokeOft === '0x0000000000000000000000000000000000000000') {
+          // Get spoke SHARE_OFT address via MoreVaultsOftFactory.OFTs(vault)
+          const spokeClient = createChainClient(spokeChainId)
+          if (!spokeClient) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
+          const spokeOft = await getSpokeShareOft(spokeClient as PublicClient, v)
+          if (!spokeOft) {
             return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
           }
 
           // Read balance + decimals on spoke chain
-          const spokeClient = createChainClient(spokeChainId)
-          if (!spokeClient) return { chainId: spokeChainId, balance: 0n, rawBalance: 0n }
-
           const [rawBalance, spokeOftDecimals] = await (spokeClient as PublicClient).multicall({
             contracts: [
               { address: spokeOft, abi: ERC20_ABI, functionName: 'balanceOf', args: [u] },

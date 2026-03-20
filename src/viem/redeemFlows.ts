@@ -22,7 +22,7 @@ import { validateWalletChain } from './chainValidation'
 import { parseContractError } from './errorParser'
 import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
 import { createChainClient } from './spokeRoutes'
-import { OMNI_FACTORY_ADDRESS } from './topology'
+import { OMNI_FACTORY_ADDRESS, getSpokeShareOft, getHubShareOft } from './topology'
 
 /**
  * R1 — Simple share redemption (ERC-4626 standard).
@@ -703,23 +703,15 @@ export async function resolveRedeemAddresses(
     throw new Error(`[MoreVaults] No composer registered for vault ${vault} on hub chain ${hubChainId}`)
   }
 
-  // Read SHARE_OFT from composer
-  const hubShareOft = await hubPublicClient.readContract({
-    address: composerAddress,
-    abi: REDEEM_COMPOSER_ABI,
-    functionName: 'SHARE_OFT',
-  }) as Address
+  // Read hub SHARE_OFT via MoreVaultsOftAdapterFactory.OFTs(vault)
+  const hubShareOft = await getHubShareOft(hubPublicClient, vault)
+  if (!hubShareOft) throw new Error(`[MoreVaults] No hub share OFT found for vault ${vault} on chain ${hubChainId}`)
 
-  // Get spoke SHARE_OFT via peers(spokeEid) on hub SHARE_OFT
-  const spokeShareOftBytes32 = await hubPublicClient.readContract({
-    address: hubShareOft,
-    abi: OFT_ABI,
-    functionName: 'peers',
-    args: [spokeEid],
-  }) as `0x${string}`
-
-  // Convert bytes32 to address (last 20 bytes)
-  const spokeShareOft = getAddress(`0x${spokeShareOftBytes32.slice(-40)}`) as Address
+  // Get spoke SHARE_OFT via MoreVaultsOftFactory.OFTs(vault)
+  const spokeClient = createChainClient(spokeChainId)
+  if (!spokeClient) throw new Error(`[MoreVaults] No client for spoke chain ${spokeChainId}`)
+  const spokeShareOft = await getSpokeShareOft(spokeClient as any, vault)
+  if (!spokeShareOft) throw new Error(`[MoreVaults] No share OFT found for vault ${vault} on spoke chain ${spokeChainId}`)
 
   // Find matching OFT route for the vault's asset on the hub chain
   let hubAssetOft: Address | null = null
