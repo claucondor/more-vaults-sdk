@@ -8,7 +8,7 @@ import {
   pad,
   zeroAddress,
 } from 'viem'
-import { VAULT_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI, ERC20_ABI, METADATA_ABI } from './abis'
+import { VAULT_ABI, VAULT_REQUEST_REDEEM_LEGACY_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI, ERC20_ABI, METADATA_ABI } from './abis'
 import type {
   VaultAddresses,
   RedeemResult,
@@ -174,6 +174,9 @@ export async function requestRedeem(
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
+  // Detect which signature the vault supports: new (uint256, address) or legacy (uint256)
+  let useLegacy = false
+
   try {
     await publicClient.simulateContract({
       address: vault,
@@ -183,17 +186,48 @@ export async function requestRedeem(
       account: account.address,
     })
   } catch (err) {
-    parseContractError(err, vault, account.address)
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('FunctionDoesNotExist') || msg.includes('0xa9ad62f8')) {
+      useLegacy = true
+    } else {
+      parseContractError(err, vault, account.address)
+    }
   }
 
-  const txHash = await walletClient.writeContract({
-    address: vault,
-    abi: VAULT_ABI,
-    functionName: 'requestRedeem',
-    args: [shares, getAddress(owner)],
-    account,
-    chain: walletClient.chain,
-  })
+  if (useLegacy) {
+    try {
+      await publicClient.simulateContract({
+        address: vault,
+        abi: VAULT_REQUEST_REDEEM_LEGACY_ABI,
+        functionName: 'requestRedeem',
+        args: [shares],
+        account: account.address,
+      })
+    } catch (err) {
+      parseContractError(err, vault, account.address)
+    }
+  }
+
+  let txHash: Hash
+  if (useLegacy) {
+    txHash = await walletClient.writeContract({
+      address: vault,
+      abi: VAULT_REQUEST_REDEEM_LEGACY_ABI,
+      functionName: 'requestRedeem',
+      args: [shares],
+      account,
+      chain: walletClient.chain,
+    })
+  } else {
+    txHash = await walletClient.writeContract({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'requestRedeem',
+      args: [shares, getAddress(owner)],
+      account,
+      chain: walletClient.chain,
+    })
+  }
 
   return { txHash }
 }

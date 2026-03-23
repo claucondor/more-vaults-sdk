@@ -37,6 +37,11 @@ export const VAULT_ABI = [
   "event WithdrawRequestFulfilled(address requester, address receiver, uint256 sharesAmount, uint256 assetAmount)",
 ] as const;
 
+// Legacy ABI for vaults deployed before the onBehalfOf parameter was added to requestRedeem
+export const VAULT_REQUEST_REDEEM_LEGACY_ABI = [
+  "function requestRedeem(uint256 shares)",
+] as const;
+
 export const BRIDGE_ABI = [
   "function initVaultActionRequest(uint8 actionType, bytes actionCallData, uint256 amountLimit, bytes extraOptions) payable returns (bytes32 guid)",
   "function getRequestInfo(bytes32 guid) view returns (tuple(address initiator, uint64 timestamp, uint8 actionType, bytes actionCallData, bool fulfilled, bool finalized, bool refunded, uint256 totalAssets, uint256 finalizationResult, uint256 amountLimit))",

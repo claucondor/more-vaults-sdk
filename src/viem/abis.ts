@@ -146,6 +146,17 @@ export const VAULT_ABI = [
   },
 ] as const
 
+// Legacy ABI for vaults deployed before the _onBehalfOf parameter was added to requestRedeem
+export const VAULT_REQUEST_REDEEM_LEGACY_ABI = [
+  {
+    type: 'function',
+    name: 'requestRedeem',
+    inputs: [{ name: '_shares', type: 'uint256' }],
+    outputs: [],
+    stateMutability: 'nonpayable',
+  },
+] as const
+
 export const BRIDGE_ABI = [
   {
     type: 'function',

@@ -1,6 +1,7 @@
 import { Contract, AbiCoder, zeroPadValue, Signer, Provider, ZeroAddress } from "ethers";
 import {
   VAULT_ABI,
+  VAULT_REQUEST_REDEEM_LEGACY_ABI,
   BRIDGE_ABI,
   ERC20_ABI,
   OFT_ABI,
@@ -157,13 +158,37 @@ export async function requestRedeem(
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
 
-  const vault = new Contract(addresses.vault, VAULT_ABI, signer);
-  let tx: any
+  // Detect which signature the vault supports: new (uint256, address) or legacy (uint256)
+  let useLegacy = false
+  const vaultNew = new Contract(addresses.vault, VAULT_ABI, signer)
+
   try {
-    tx = await vault.requestRedeem(shares, owner);
+    await vaultNew.requestRedeem.staticCall(shares, owner)
   } catch (err) {
-    parseContractError(err, addresses.vault)
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('FunctionDoesNotExist') || msg.includes('0xa9ad62f8')) {
+      useLegacy = true
+    } else {
+      parseContractError(err, addresses.vault)
+    }
   }
+
+  let tx: any
+  if (useLegacy) {
+    const vaultLegacy = new Contract(addresses.vault, VAULT_REQUEST_REDEEM_LEGACY_ABI, signer)
+    try {
+      tx = await vaultLegacy.requestRedeem(shares)
+    } catch (err) {
+      parseContractError(err, addresses.vault)
+    }
+  } else {
+    try {
+      tx = await vaultNew.requestRedeem(shares, owner)
+    } catch (err) {
+      parseContractError(err, addresses.vault)
+    }
+  }
+
   const receipt = await tx!.wait();
   return { receipt };
 }
