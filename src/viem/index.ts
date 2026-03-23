@@ -85,6 +85,7 @@ export {
   InsufficientBalanceError,
   AsyncRequestTimeoutError,
   ComposeTimeoutError,
+  WithdrawalTimelockActiveError,
 } from './errors'
 
 // --- Deposit Flows ---

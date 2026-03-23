@@ -195,3 +195,18 @@ export class ComposeTimeoutError extends MoreVaultsError {
     this.guid = guid
   }
 }
+
+export class WithdrawalTimelockActiveError extends MoreVaultsError {
+  timelockEndsAt: bigint
+  requestTxHash?: string
+  constructor(vault: string, timelockEndsAt: bigint, requestTxHash?: string) {
+    const date = new Date(Number(timelockEndsAt) * 1000).toISOString()
+    super(
+      `[MoreVaults] Withdrawal timelock on vault ${vault} is active until ${date}. ` +
+      `Call smartRedeem again after the timelock expires to complete the withdrawal.`
+    )
+    this.name = 'WithdrawalTimelockActiveError'
+    this.timelockEndsAt = timelockEndsAt
+    this.requestTxHash = requestTxHash
+  }
+}

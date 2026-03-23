@@ -14,7 +14,7 @@ import {
 } from "./types";
 import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
-import { EscrowNotConfiguredError, InvalidInputError, VaultPausedError } from "./errors";
+import { EscrowNotConfiguredError, InvalidInputError, VaultPausedError, WithdrawalTimelockActiveError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
 import { getVaultStatus, quoteLzFee, detectStargateOft } from "./utils";
 import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
@@ -409,7 +409,33 @@ export async function smartRedeem(
     return redeemAsync(signer, addresses, shares, receiver, owner, lzFee, extraOptions);
   }
 
-  // Sync vault — direct redeem
+  if (status.withdrawalQueueEnabled) {
+    const pending = await getWithdrawalRequest(provider, vault, owner);
+    const now = BigInt(Math.floor(Date.now() / 1000));
+
+    if (pending && (pending.timelockEndsAt === 0n || now >= pending.timelockEndsAt)) {
+      // Timelock expired (or no timelock) and request is pending — complete the redeem
+      return redeemShares(signer, addresses, shares, receiver, owner);
+    }
+
+    if (pending) {
+      // Request submitted but timelock not yet expired
+      throw new WithdrawalTimelockActiveError(vault, pending.timelockEndsAt);
+    }
+
+    if (status.withdrawalTimelockSeconds === 0n) {
+      // R3 — no timelock: submit request then redeem immediately back-to-back
+      await requestRedeem(signer, addresses, shares, owner);
+      return redeemShares(signer, addresses, shares, receiver, owner);
+    }
+
+    // R4 — timelock active: submit request and throw with expected expiry
+    const { receipt } = await requestRedeem(signer, addresses, shares, owner);
+    const timelockEndsAt = now + status.withdrawalTimelockSeconds;
+    throw new WithdrawalTimelockActiveError(vault, timelockEndsAt, receipt?.hash);
+  }
+
+  // Sync vault without queue — direct redeem
   return redeemShares(signer, addresses, shares, receiver, owner);
 }
 
