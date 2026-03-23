@@ -10,6 +10,7 @@ import {
   VaultAddresses,
   RedeemResult,
   AsyncRequestResult,
+  RedeemCostEstimate,
   ActionType,
 } from "./types";
 import type { ContractTransactionReceipt } from "ethers";
@@ -371,6 +372,122 @@ export async function bridgeSharesToHub(
 // ---------------------------------------------------------------------------
 // Smart redeem -- auto-detect vault type
 // ---------------------------------------------------------------------------
+
+/**
+ * Estimate the gas cost of closing a position (redeeming shares).
+ *
+ * Detects the vault mode and returns a per-step gas breakdown without
+ * sending any transaction. For async vaults the LayerZero fee is also quoted.
+ *
+ * @param provider      Provider for reads and gas estimation
+ * @param addresses     Vault address set
+ * @param shares        Amount of shares to redeem
+ * @param receiver      Address that will receive the underlying assets
+ * @param owner         Owner of the shares
+ * @param extraOptions  Optional LZ extra options (only used for async vaults)
+ * @returns             Cost estimate with per-step gas breakdown and total
+ */
+export async function estimateRedeemCost(
+  provider: Provider,
+  addresses: VaultAddresses,
+  shares: bigint,
+  receiver: string,
+  owner: string,
+  extraOptions: string = "0x",
+): Promise<RedeemCostEstimate> {
+  const vault = addresses.vault;
+  const status = await getVaultStatus(provider, vault);
+
+  if (status.mode === "paused") throw new VaultPausedError(vault);
+
+  // --- Async vault ---
+  if (status.recommendedDepositFlow === "depositAsync") {
+    const lzFee = await quoteLzFee(provider, vault, extraOptions);
+
+    const abiCoder = AbiCoder.defaultAbiCoder();
+    const actionCallData = abiCoder.encode(
+      ["uint256", "address", "address"],
+      [shares, receiver, owner],
+    );
+
+    const vaultContract = new Contract(vault, BRIDGE_ABI, provider);
+    let requestGas = 0n;
+    try {
+      const raw = await vaultContract.initVaultActionRequest.estimateGas(
+        ActionType.REDEEM, actionCallData, 0n, extraOptions,
+        { value: lzFee, from: owner },
+      );
+      requestGas = (BigInt(raw.toString()) * 130n) / 100n;
+    } catch { /* return 0 if simulation fails */ }
+
+    const approveGas = 60_000n;
+    return {
+      flow: "async",
+      steps: [
+        { label: "approve shares to escrow", gasEstimate: approveGas },
+        { label: "initVaultActionRequest", gasEstimate: requestGas },
+      ],
+      totalGasEstimate: approveGas + requestGas,
+      lzFee,
+    };
+  }
+
+  // --- Queued vault ---
+  if (status.withdrawalQueueEnabled) {
+    const vaultNew = new Contract(vault, VAULT_ABI, provider);
+    let requestGas = 0n;
+    try {
+      const raw = await vaultNew.requestRedeem.estimateGas(shares, owner, { from: owner });
+      requestGas = BigInt(raw.toString());
+    } catch {
+      try {
+        const vaultLegacy = new Contract(vault, VAULT_REQUEST_REDEEM_LEGACY_ABI, provider);
+        const raw = await vaultLegacy.requestRedeem.estimateGas(shares, { from: owner });
+        requestGas = BigInt(raw.toString());
+      } catch { /* return 0 if simulation fails */ }
+    }
+
+    if (status.withdrawalTimelockSeconds === 0n) {
+      let redeemGas = 0n;
+      try {
+        const raw = await vaultNew.redeem.estimateGas(shares, receiver, owner, { from: owner });
+        redeemGas = BigInt(raw.toString());
+      } catch { /* return 0 if simulation fails */ }
+
+      return {
+        flow: "queue-no-timelock",
+        steps: [
+          { label: "requestRedeem", gasEstimate: requestGas },
+          { label: "redeemShares", gasEstimate: redeemGas },
+        ],
+        totalGasEstimate: requestGas + redeemGas,
+        lzFee: 0n,
+      };
+    }
+
+    return {
+      flow: "queue-timelock",
+      steps: [{ label: "requestRedeem", gasEstimate: requestGas }],
+      totalGasEstimate: requestGas,
+      lzFee: 0n,
+    };
+  }
+
+  // --- Direct sync redeem ---
+  const vaultContract = new Contract(vault, VAULT_ABI, provider);
+  let redeemGas = 0n;
+  try {
+    const raw = await vaultContract.redeem.estimateGas(shares, receiver, owner, { from: owner });
+    redeemGas = BigInt(raw.toString());
+  } catch { /* return 0 if simulation fails */ }
+
+  return {
+    flow: "direct",
+    steps: [{ label: "redeemShares", gasEstimate: redeemGas }],
+    totalGasEstimate: redeemGas,
+    lzFee: 0n,
+  };
+}
 
 /**
  * Smart redeem — auto-selects the correct flow based on vault configuration.

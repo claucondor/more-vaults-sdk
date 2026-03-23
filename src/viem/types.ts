@@ -33,6 +33,17 @@ export interface AsyncRequestResult {
   guid: `0x${string}`
 }
 
+export interface RedeemCostEstimate {
+  /** Which redeem flow will be used based on vault configuration */
+  flow: 'direct' | 'queue-no-timelock' | 'queue-timelock' | 'async'
+  /** Gas estimate per transaction step */
+  steps: { label: string; gasEstimate: bigint }[]
+  /** Sum of gasEstimate across all steps */
+  totalGasEstimate: bigint
+  /** LayerZero fee in native token wei (0 for non-async vaults) */
+  lzFee: bigint
+}
+
 /**
  * ActionType enum values matching MoreVaultsLib.ActionType on-chain.
  * DEPOSIT=0, MINT=1, WITHDRAW=2, REDEEM=3, MULTI_ASSETS_DEPOSIT=4, ACCRUE_FEES=5

@@ -13,6 +13,7 @@ import type {
   VaultAddresses,
   RedeemResult,
   AsyncRequestResult,
+  RedeemCostEstimate,
 } from './types'
 import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee, detectStargateOft } from './utils'
@@ -365,6 +366,143 @@ export async function redeemAsync(
   })
 
   return { txHash, guid: guid! }
+}
+
+/**
+ * Estimate the gas cost of closing a position (redeeming shares).
+ *
+ * Detects the vault mode and returns a per-step gas breakdown without
+ * sending any transaction. For async vaults the LayerZero fee is also quoted.
+ *
+ * @param publicClient  Public client for reads and gas estimation
+ * @param addresses     Vault address set
+ * @param shares        Amount of shares to redeem
+ * @param receiver      Address that will receive the underlying assets
+ * @param owner         Owner of the shares
+ * @param extraOptions  Optional LZ extra options (only used for async vaults)
+ * @returns             Cost estimate with per-step gas breakdown and total
+ */
+export async function estimateRedeemCost(
+  publicClient: PublicClient,
+  addresses: VaultAddresses,
+  shares: bigint,
+  receiver: Address,
+  owner: Address,
+  extraOptions: `0x${string}` = '0x',
+): Promise<RedeemCostEstimate> {
+  const vault = getAddress(addresses.vault)
+  const status = await getVaultStatus(publicClient, vault)
+
+  if (status.mode === 'paused') throw new VaultPausedError(vault)
+
+  // --- Async vault ---
+  if (status.recommendedDepositFlow === 'depositAsync') {
+    const lzFee = await quoteLzFee(publicClient, vault, extraOptions)
+
+    const actionCallData = encodeAbiParameters(
+      [{ type: 'uint256', name: 'shares' }, { type: 'address', name: 'receiver' }, { type: 'address', name: 'owner' }],
+      [shares, getAddress(receiver), getAddress(owner)],
+    ) as `0x${string}`
+
+    let requestGas = 0n
+    try {
+      const raw = await publicClient.estimateContractGas({
+        address: vault,
+        abi: BRIDGE_ABI,
+        functionName: 'initVaultActionRequest',
+        args: [ActionType.REDEEM, actionCallData, 0n, extraOptions],
+        value: lzFee,
+        account: owner,
+      })
+      requestGas = raw * 130n / 100n
+    } catch { /* return 0 if simulation fails (e.g. insufficient balance) */ }
+
+    const approveGas = 60_000n
+    return {
+      flow: 'async',
+      steps: [
+        { label: 'approve shares to escrow', gasEstimate: approveGas },
+        { label: 'initVaultActionRequest', gasEstimate: requestGas },
+      ],
+      totalGasEstimate: approveGas + requestGas,
+      lzFee,
+    }
+  }
+
+  // --- Queued vault ---
+  if (status.withdrawalQueueEnabled) {
+    let requestGas = 0n
+    try {
+      requestGas = await publicClient.estimateContractGas({
+        address: vault,
+        abi: VAULT_ABI,
+        functionName: 'requestRedeem',
+        args: [shares, getAddress(owner)],
+        account: owner,
+      })
+    } catch {
+      try {
+        requestGas = await publicClient.estimateContractGas({
+          address: vault,
+          abi: VAULT_REQUEST_REDEEM_LEGACY_ABI,
+          functionName: 'requestRedeem',
+          args: [shares],
+          account: owner,
+        })
+      } catch { /* return 0 if simulation fails */ }
+    }
+
+    if (status.withdrawalTimelockSeconds === 0n) {
+      // R3 — both steps happen immediately
+      let redeemGas = 0n
+      try {
+        redeemGas = await publicClient.estimateContractGas({
+          address: vault,
+          abi: VAULT_ABI,
+          functionName: 'redeem',
+          args: [shares, getAddress(receiver), getAddress(owner)],
+          account: owner,
+        })
+      } catch { /* return 0 if simulation fails */ }
+
+      return {
+        flow: 'queue-no-timelock',
+        steps: [
+          { label: 'requestRedeem', gasEstimate: requestGas },
+          { label: 'redeemShares', gasEstimate: redeemGas },
+        ],
+        totalGasEstimate: requestGas + redeemGas,
+        lzFee: 0n,
+      }
+    }
+
+    // R4 — only the request step is paid now; redeemShares is paid later
+    return {
+      flow: 'queue-timelock',
+      steps: [{ label: 'requestRedeem', gasEstimate: requestGas }],
+      totalGasEstimate: requestGas,
+      lzFee: 0n,
+    }
+  }
+
+  // --- Direct sync redeem ---
+  let redeemGas = 0n
+  try {
+    redeemGas = await publicClient.estimateContractGas({
+      address: vault,
+      abi: VAULT_ABI,
+      functionName: 'redeem',
+      args: [shares, getAddress(receiver), getAddress(owner)],
+      account: owner,
+    })
+  } catch { /* return 0 if simulation fails */ }
+
+  return {
+    flow: 'direct',
+    steps: [{ label: 'redeemShares', gasEstimate: redeemGas }],
+    totalGasEstimate: redeemGas,
+    lzFee: 0n,
+  }
 }
 
 /**
