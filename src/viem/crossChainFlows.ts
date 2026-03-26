@@ -14,7 +14,7 @@ import { ensureAllowance, detectStargateOft } from './utils'
 import { OFT_ROUTES, EID_TO_CHAIN_ID } from './chains'
 import { OMNI_FACTORY_ADDRESS } from './topology'
 import { createChainClient } from './spokeRoutes'
-import { ComposerNotConfiguredError, InvalidInputError } from './errors'
+import { ComposerNotConfiguredError, InvalidInputError, ComposeAlreadyExecutedError } from './errors'
 import { parseContractError } from './errorParser'
 import { getDefaultStorage, saveDepositFlow, clearDepositFlow, type FlowStorage } from './flowStorage'
 
@@ -706,7 +706,17 @@ export async function waitForCompose(
 
               console.log(`[more-vaults-sdk] waitForCompose composeQueue hash=${hash} empty=${hash === EMPTY_HASH} received=${hash === RECEIVED_HASH}`)
 
-              if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+              if (hash === RECEIVED_HASH) {
+                // Compose was already executed by someone — deposit is complete
+                console.log(`[more-vaults-sdk] waitForCompose compose already executed (RECEIVED_HASH) — clearing flow and signaling done`)
+                if (options?.walletAddress) {
+                  const st = options?.storage !== undefined ? options.storage : getDefaultStorage()
+                  if (st) try { await clearDepositFlow(st, options.walletAddress) } catch { /* non-fatal */ }
+                }
+                throw new ComposeAlreadyExecutedError()
+              }
+
+              if (hash !== EMPTY_HASH) {
                 console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber}, scanned from ${startBlock})`)
                 const fullComposeData = {
                   ...composeData,
@@ -737,6 +747,7 @@ export async function waitForCompose(
           // Only advance scannedUpTo after getLogs + composeQueue all succeed
           scannedUpTo = chunkEnd
         } catch (e) {
+          if (e instanceof ComposeAlreadyExecutedError) throw e
           // Any failure (getLogs or composeQueue) — retry this chunk next poll
           console.log(`[more-vaults-sdk] waitForCompose chunk ${from}→${chunkEnd} failed, will retry:`, String(e).slice(0, 120))
           break
@@ -744,7 +755,8 @@ export async function waitForCompose(
 
         from = chunkEnd + 1n
       }
-    } catch {
+    } catch (e) {
+      if (e instanceof ComposeAlreadyExecutedError) throw e
       // getBlockNumber failed — retry next poll
     }
 
@@ -962,20 +974,25 @@ export async function executeCompose(
     // Receipt timeout — guid will be undefined, caller can still poll by balance
   }
 
-  // Checkpoint: persist hub_sent state for crash recovery
+  // Checkpoint: persist flow state for crash recovery.
+  // D6 vaults (oracle ON, no LZ Read) are synchronous — no tokensLocked, no guid.
+  // Mark as done immediately so resume never shows a stale spinner.
   const execStorage = options?.storage !== undefined ? options.storage : getDefaultStorage()
   if (execStorage) {
     try {
-      await saveDepositFlow(execStorage, account.address, {
-        phase: 'hub_sent',
-        guid: guid ?? '',
-        vault: (tokensLocked?.vault ?? composeData.to) as string,
-        composerSentGuid,
-        tokensLocked: tokensLocked
-          ? { ...tokensLocked, amount: tokensLocked.amount.toString() }
-          : undefined,
-        timestamp: Date.now(),
-      })
+      if (!tokensLocked) {
+        // Synchronous compose (D6) — deposit complete, nothing left to wait for
+        await saveDepositFlow(execStorage, account.address, { phase: 'done' })
+      } else {
+        await saveDepositFlow(execStorage, account.address, {
+          phase: 'hub_sent',
+          guid: guid ?? '',
+          vault: tokensLocked.vault as string,
+          composerSentGuid,
+          tokensLocked: { ...tokensLocked, amount: tokensLocked.amount.toString() },
+          timestamp: Date.now(),
+        })
+      }
     } catch { /* non-fatal */ }
   }
 

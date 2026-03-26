@@ -4,7 +4,7 @@ import type { ContractTransactionReceipt } from "ethers";
 import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider } from "./chains";
 import { detectStargateOft } from "./utils";
 import { OMNI_FACTORY_ADDRESS } from "./topology";
-import { ComposerNotConfiguredError, InvalidInputError } from "./errors";
+import { ComposerNotConfiguredError, InvalidInputError, ComposeAlreadyExecutedError } from "./errors";
 
 /** LZ Endpoint V2 address — same on all EVM chains */
 const LZ_ENDPOINT = "0x1a44076050125825900e736c501f859c50fe728c";
@@ -471,7 +471,12 @@ export async function waitForCompose(
                   logFrom, composer, logGuid, logIndex,
                 )
 
-                if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+                if (hash === RECEIVED_HASH) {
+                  console.log(`[more-vaults-sdk] waitForCompose compose already executed (RECEIVED_HASH) — signaling done`)
+                  throw new ComposeAlreadyExecutedError()
+                }
+
+                if (hash !== EMPTY_HASH) {
                   console.log(`[${elapsed}s] Poll #${attempt} — compose found! (block ${log.blockNumber})`)
                   return {
                     ...composeData,
@@ -483,9 +488,13 @@ export async function waitForCompose(
                   }
                 }
               }
-            } catch { /* decode failed — skip log */ }
+            } catch (e) {
+              if (e instanceof ComposeAlreadyExecutedError) throw e
+              /* decode failed — skip log */
+            }
           }
-        } catch {
+        } catch (e) {
+          if (e instanceof ComposeAlreadyExecutedError) throw e
           // Chunk failed (RPC limit) — break inner loop, will retry next poll
           break
         }
@@ -494,7 +503,8 @@ export async function waitForCompose(
       }
 
       scannedUpTo = currentBlock
-    } catch {
+    } catch (e) {
+      if (e instanceof ComposeAlreadyExecutedError) throw e
       // getBlockNumber failed — retry next poll
     }
 

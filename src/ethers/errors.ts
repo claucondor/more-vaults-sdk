@@ -196,6 +196,13 @@ export class ComposeTimeoutError extends MoreVaultsError {
   }
 }
 
+export class ComposeAlreadyExecutedError extends MoreVaultsError {
+  constructor() {
+    super('[MoreVaults] Compose already executed — deposit is complete, no action needed.')
+    this.name = 'ComposeAlreadyExecutedError'
+  }
+}
+
 export class WithdrawalTimelockActiveError extends MoreVaultsError {
   timelockEndsAt: bigint
   requestTxHash?: string

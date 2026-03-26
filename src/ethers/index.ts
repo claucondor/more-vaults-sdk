@@ -90,6 +90,7 @@ export {
   InsufficientBalanceError,
   AsyncRequestTimeoutError,
   ComposeTimeoutError,
+  ComposeAlreadyExecutedError,
   WithdrawalTimelockActiveError,
 } from "./errors";
 
