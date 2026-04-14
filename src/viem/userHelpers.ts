@@ -209,6 +209,10 @@ export async function canDeposit(
     allowFailure: false,
   })
 
+  if (isPaused) {
+    return { allowed: false, reason: 'paused', whitelistEnabled: false }
+  }
+
   // Read whitelist status (may revert on older vaults — default to false)
   let whitelistEnabled = false
   try {
@@ -221,18 +225,36 @@ export async function canDeposit(
     // Older vaults may not have this function
   }
 
-  if (isPaused) {
-    return { allowed: false, reason: 'paused', whitelistEnabled }
+  // Check whitelist via getAvailableToDeposit BEFORE the isCrossChainAsync short-circuit.
+  // Cross-chain async hub vaults revert on maxDeposit(), so we cannot use a maxDeposit() revert
+  // as a whitelist signal — getAvailableToDeposit() is the authoritative per-user check.
+  if (whitelistEnabled) {
+    let available = 0n
+    try {
+      available = await publicClient.readContract({
+        address: v,
+        abi: VAULT_ANALYSIS_ABI,
+        functionName: 'getAvailableToDeposit',
+        args: [getAddress(user)],
+      }) as bigint
+    } catch {
+      // Revert on getAvailableToDeposit — treat as not whitelisted
+      return { allowed: false, reason: 'not-whitelisted', maxDeposit: 0n, whitelistEnabled }
+    }
+    if (available === 0n) {
+      return { allowed: false, reason: 'not-whitelisted', maxDeposit: 0n, whitelistEnabled }
+    }
   }
 
-  // Cross-chain async hubs revert on maxDeposit — this is expected, not a whitelist block.
-  // The vault accepts deposits via initVaultActionRequest instead of the standard ERC-4626 path.
+  // Cross-chain async hubs accept deposits via initVaultActionRequest, not ERC-4626.
+  // maxDeposit() reverts on these vaults — skip the capacity check.
   const isCrossChainAsync = isHub && !oraclesEnabled
   if (isCrossChainAsync) {
     return { allowed: true, reason: 'ok', whitelistEnabled }
   }
 
-  // maxDeposit(user) can REVERT on vaults with whitelist/ACL
+  // For standard (ERC-4626) vaults: check remaining capacity via maxDeposit.
+  // A revert here catches legacy vaults that use maxDeposit as an ACL gate.
   let maxDepositAmount: bigint
   try {
     maxDepositAmount = await publicClient.readContract({
@@ -242,7 +264,6 @@ export async function canDeposit(
       args: [getAddress(user)],
     })
   } catch {
-    // Revert means the vault has whitelist/ACL and this user is not approved
     return { allowed: false, reason: 'not-whitelisted', maxDeposit: 0n, whitelistEnabled }
   }
 

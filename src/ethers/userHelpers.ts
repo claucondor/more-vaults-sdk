@@ -6,7 +6,7 @@
 
 import { Contract, Interface } from "ethers";
 import type { Provider } from "ethers";
-import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from "./abis";
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI, VAULT_ANALYSIS_ABI } from "./abis";
 import type { CrossChainRequestInfo } from "./types";
 import { getVaultStatus } from "./utils";
 import type { VaultStatus } from "./utils";
@@ -172,6 +172,7 @@ export async function canDeposit(
   user: string
 ): Promise<DepositEligibility> {
   const config = new Contract(vault, CONFIG_ABI, provider);
+  const analysis = new Contract(vault, VAULT_ANALYSIS_ABI, provider);
 
   const isPaused = await (config.paused() as Promise<boolean>);
 
@@ -179,12 +180,35 @@ export async function canDeposit(
     return { allowed: false, reason: "paused" };
   }
 
-  // maxDeposit(user) can REVERT on vaults with whitelist/ACL
+  // Check whitelist via getAvailableToDeposit before the capacity check.
+  // maxDeposit() reverts on cross-chain async hub vaults, so we cannot rely on a maxDeposit()
+  // revert as a whitelist signal — getAvailableToDeposit() is the authoritative per-user check.
+  let whitelistEnabled = false;
+  try {
+    whitelistEnabled = await (analysis.isDepositWhitelistEnabled() as Promise<boolean>);
+  } catch {
+    // Older vaults may not have this function
+  }
+
+  if (whitelistEnabled) {
+    let available = 0n;
+    try {
+      available = await (analysis.getAvailableToDeposit(user) as Promise<bigint>);
+    } catch {
+      // Revert on getAvailableToDeposit — treat as not whitelisted
+      return { allowed: false, reason: "not-whitelisted" };
+    }
+    if (available === 0n) {
+      return { allowed: false, reason: "not-whitelisted" };
+    }
+  }
+
+  // maxDeposit(user) can REVERT on vaults with whitelist/ACL (legacy vaults without
+  // getAvailableToDeposit) or on cross-chain async hubs. Treat any revert as not-whitelisted.
   let maxDepositAmount: bigint;
   try {
     maxDepositAmount = await (config.maxDeposit(user) as Promise<bigint>);
   } catch {
-    // Revert means the vault has whitelist/ACL and this user is not approved
     return { allowed: false, reason: "not-whitelisted" };
   }
 
