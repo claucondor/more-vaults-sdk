@@ -6,7 +6,7 @@
 
 import { Contract, Interface, ZeroAddress } from "ethers";
 import type { Provider, Signer } from "ethers";
-import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI } from "./abis";
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, ADMIN_CONFIG_ABI } from "./abis";
 import { MoreVaultsError, CCManagerNotConfiguredError, AsyncRequestTimeoutError } from "./errors";
 
 // Minimal ABI for Stargate type detection
@@ -288,12 +288,13 @@ export async function getVaultStatus(
   vault: string
 ): Promise<VaultStatus> {
   const mc = new Contract(MULTICALL3_ADDRESS, MULTICALL3_ABI, provider);
-  const configIface   = new Interface(CONFIG_ABI as unknown as string[]);
-  const bridgeIface   = new Interface(BRIDGE_ABI as unknown as string[]);
-  const vaultIface    = new Interface(VAULT_ABI  as unknown as string[]);
-  const decimalsIface = new Interface(["function decimals() view returns (uint8)"]);
+  const configIface      = new Interface(CONFIG_ABI as unknown as string[]);
+  const adminConfigIface = new Interface(ADMIN_CONFIG_ABI as unknown as string[]);
+  const bridgeIface      = new Interface(BRIDGE_ABI as unknown as string[]);
+  const vaultIface       = new Interface(VAULT_ABI  as unknown as string[]);
+  const decimalsIface    = new Interface(["function decimals() view returns (uint8)"]);
 
-  // ── Batch 1: 12 calls → 1 eth_call via Multicall3.aggregate3 ─────────────
+  // ── Batch 1: 13 calls → 1 eth_call via Multicall3.aggregate3 ─────────────
   const b1Calls = [
     { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("isHub") },
     { target: vault, allowFailure: false, callData: configIface.encodeFunctionData("paused") },
@@ -308,6 +309,8 @@ export async function getVaultStatus(
     { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("totalAssets") },
     { target: vault, allowFailure: false, callData: vaultIface.encodeFunctionData("totalSupply") },
     { target: vault, allowFailure: false, callData: decimalsIface.encodeFunctionData("decimals") },
+    // allowFailure=true: older vaults may not have depositCapacity
+    { target: vault, allowFailure: true,  callData: adminConfigIface.encodeFunctionData("depositCapacity") },
   ];
 
   const b1: { success: boolean; returnData: string }[] = await mc.aggregate3.staticCall(b1Calls);
@@ -329,6 +332,9 @@ export async function getVaultStatus(
   const decimalsRaw       = decimalsIface.decodeFunctionResult("decimals",    b1[11].returnData)[0];
   const decimalsNum       = Number(decimalsRaw);
   const oneShare          = 10n ** BigInt(decimalsNum);
+  const depositCapacity   = b1[12].success
+    ? adminConfigIface.decodeFunctionResult("depositCapacity", b1[12].returnData)[0] as bigint
+    : 0n;
 
   // ── Batch 2: 2 calls → 1 eth_call (depends on underlying + decimals) ─────
   const erc20Iface = new Interface(ERC20_ABI as unknown as string[]);
@@ -353,11 +359,20 @@ export async function getVaultStatus(
   const depositAccessRestricted = maxDepositRaw === null && !isCrossChainAsync;
   const effectiveCapacity: bigint = maxDepositRaw === null ? MAX_UINT256 : maxDepositRaw!;
 
+  // maxDeposit(address(0)) returns 0 in two distinct cases:
+  //   1. Vault is truly at capacity: depositCapacity > 0 && totalAssets >= depositCapacity
+  //   2. Whitelist is enabled and address(0) has no quota — but vault is NOT full
+  // Only set mode='full' for case 1. Case 2 should remain 'local'/'cross-chain-oracle'
+  // so that smartDeposit proceeds and preflightSync throws WhitelistQuotaExhaustedError.
+  const isTrulyFull = effectiveCapacity === 0n
+    && !isCrossChainAsync
+    && (depositCapacity > 0n && totalAssets >= depositCapacity);
+
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode;
   if (isPaused) {
     mode = "paused";
-  } else if (effectiveCapacity === 0n) {
+  } else if (isTrulyFull) {
     mode = "full";
   } else if (!isHub) {
     mode = "local";
@@ -389,7 +404,7 @@ export async function getVaultStatus(
   if (isPaused) {
     issues.push("Vault is paused — no deposits or redeems are possible.");
   }
-  if (effectiveCapacity === 0n && !isPaused) {
+  if (isTrulyFull) {
     issues.push(
       "Deposit capacity is full — increase depositCapacity via setDepositCapacity()."
     );

@@ -6,7 +6,7 @@ import {
   getAddress,
   zeroAddress,
 } from 'viem'
-import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI } from './abis'
+import { BRIDGE_ABI, CONFIG_ABI, ERC20_ABI, VAULT_ABI, METADATA_ABI, ADMIN_CONFIG_ABI } from './abis'
 import type { CrossChainRequestInfo } from './types'
 import { MoreVaultsError, CCManagerNotConfiguredError, AsyncRequestTimeoutError } from './errors.js'
 import { getDefaultStorage, clearDepositFlow, type FlowStorage } from './flowStorage'
@@ -174,11 +174,12 @@ export async function getVaultStatus(
       { address: v, abi: CONFIG_ABI,  functionName: 'getEscrow' },
       { address: v, abi: CONFIG_ABI,  functionName: 'getWithdrawalQueueStatus' },
       { address: v, abi: CONFIG_ABI,  functionName: 'getWithdrawalTimelock' },
-      { address: v, abi: CONFIG_ABI,  functionName: 'maxDeposit', args: [zeroAddress] },
-      { address: v, abi: VAULT_ABI,   functionName: 'asset' },
-      { address: v, abi: VAULT_ABI,   functionName: 'totalAssets' },
-      { address: v, abi: VAULT_ABI,   functionName: 'totalSupply' },
-      { address: v, abi: METADATA_ABI, functionName: 'decimals' },
+      { address: v, abi: CONFIG_ABI,       functionName: 'maxDeposit', args: [zeroAddress] },
+      { address: v, abi: VAULT_ABI,        functionName: 'asset' },
+      { address: v, abi: VAULT_ABI,        functionName: 'totalAssets' },
+      { address: v, abi: VAULT_ABI,        functionName: 'totalSupply' },
+      { address: v, abi: METADATA_ABI,     functionName: 'decimals' },
+      { address: v, abi: ADMIN_CONFIG_ABI, functionName: 'depositCapacity' },
     ] as const,
     allowFailure: true,
   })
@@ -196,6 +197,7 @@ export async function getVaultStatus(
   const totalAssets         = b1[9].status  === 'success' ? b1[9].result  as bigint  : 0n
   const totalSupply         = b1[10].status === 'success' ? b1[10].result as bigint  : 0n
   const decimals            = b1[11].status === 'success' ? Number(b1[11].result)    : 18
+  const depositCapacity     = b1[12].status === 'success' ? b1[12].result as bigint  : 0n
 
   // ── Batch 2: depends on underlying + decimals from batch 1 ────────────────
   const oneShare = 10n ** BigInt(decimals)
@@ -221,11 +223,20 @@ export async function getVaultStatus(
   const depositAccessRestricted = maxDepositRaw === null && !isCrossChainAsync
   const effectiveCapacity: bigint = (maxDepositRaw === null) ? MAX_UINT256 : maxDepositRaw
 
+  // maxDeposit(address(0)) returns 0 in two distinct cases:
+  //   1. Vault is truly at capacity: depositCapacity > 0 && totalAssets >= depositCapacity
+  //   2. Whitelist is enabled and address(0) has no quota — but vault is NOT full
+  // Only set mode='full' for case 1. Case 2 should remain 'local'/'cross-chain-oracle'
+  // so that smartDeposit proceeds and preflightSync throws WhitelistQuotaExhaustedError.
+  const isTrulyFull = effectiveCapacity === 0n
+    && !isCrossChainAsync
+    && (depositCapacity > 0n && totalAssets >= depositCapacity)
+
   // ── Derive mode ────────────────────────────────────────────────────────────
   let mode: VaultMode
   if (isPaused) {
     mode = 'paused'
-  } else if (effectiveCapacity === 0n) {
+  } else if (isTrulyFull) {
     mode = 'full'
   } else if (!isHub) {
     mode = 'local'
