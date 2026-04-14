@@ -16,6 +16,7 @@ import {
   EscrowNotConfiguredError,
   NotHubVaultError,
   CapacityFullError,
+  WhitelistQuotaExhaustedError,
   InsufficientBalanceError,
   UnsupportedChainError,
   MoreVaultsError,
@@ -135,34 +136,53 @@ export async function preflightRedeemLiquidity(
  *
  * Validates that:
  * 1. The vault is not paused.
- * 2. The vault still has deposit capacity (maxDeposit > 0).
+ * 2. The user still has deposit capacity (maxDeposit(user) > 0).
  *
- * Both reads are executed in parallel.
+ * When maxDeposit(user) returns 0 the function disambiguates the cause:
+ *   - Global capacity exhausted (depositCapacity > 0 && totalAssets >= depositCapacity)
+ *     → throws CapacityFullError
+ *   - User's whitelist quota is 0 (whitelist enabled, user cap spent or never set)
+ *     → throws WhitelistQuotaExhaustedError
+ *
+ * All reads that can run in parallel are batched via Promise.all.
  *
  * @param provider  Read-only provider for contract reads
  * @param vault     Vault address (diamond proxy)
+ * @param user      Address that will receive vault shares (used for maxDeposit check)
  */
 export async function preflightSync(
   provider: Provider,
-  vault: string
+  vault: string,
+  user: string
 ): Promise<void> {
   const config = new Contract(vault, CONFIG_ABI, provider);
 
-  // Run paused and maxDeposit in parallel.
-  // maxDeposit(ZeroAddress) may REVERT on whitelisted vaults — catch separately.
+  // Run paused and maxDeposit(user) in parallel.
+  // maxDeposit may revert on pre-oracle cross-chain vaults — treat as "no cap".
   const [isPaused, depositCapResult] = await Promise.all([
     config.paused() as Promise<boolean>,
-    (config.maxDeposit(ZeroAddress) as Promise<bigint>).catch(() => null as null),
+    (config.maxDeposit(user) as Promise<bigint>).catch(() => null as null),
   ]);
 
   if (isPaused) {
     throw new VaultPausedError(vault)
   }
 
-  // null means maxDeposit reverted → whitelist vault — skip capacity check
-  // (the user may still be whitelisted; canDeposit will do user-specific check)
-  if (depositCapResult !== null && depositCapResult === 0n) {
-    throw new CapacityFullError(vault)
+  // null → maxDeposit reverted (cross-chain vault without oracle) — skip check.
+  if (depositCapResult === null) return;
+
+  if (depositCapResult === 0n) {
+    // Disambiguate: global capacity full vs whitelist quota exhausted.
+    const vaultContract = new Contract(vault, VAULT_ABI, provider);
+    const [capacity, assets]: [bigint, bigint] = await Promise.all([
+      config.depositCapacity() as Promise<bigint>,
+      vaultContract.totalAssets() as Promise<bigint>,
+    ]);
+
+    if (capacity > 0n && assets >= capacity) {
+      throw new CapacityFullError(vault)
+    }
+    throw new WhitelistQuotaExhaustedError(vault, user)
   }
 }
 

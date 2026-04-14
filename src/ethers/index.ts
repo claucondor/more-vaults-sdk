@@ -71,6 +71,7 @@ export {
   VaultPausedError,
   CapacityFullError,
   NotWhitelistedError,
+  WhitelistQuotaExhaustedError,
   InsufficientLiquidityError,
   CCManagerNotConfiguredError,
   EscrowNotConfiguredError,

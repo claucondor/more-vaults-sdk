@@ -7,7 +7,7 @@
  */
 
 import { type Address, type PublicClient, getAddress, zeroAddress } from 'viem'
-import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI, OFT_ABI } from './abis'
+import { CONFIG_ABI, BRIDGE_ABI, VAULT_ABI, ERC20_ABI, OFT_ABI, ADMIN_CONFIG_ABI } from './abis'
 import {
   InsufficientLiquidityError,
   VaultPausedError,
@@ -15,6 +15,7 @@ import {
   EscrowNotConfiguredError,
   NotHubVaultError,
   CapacityFullError,
+  WhitelistQuotaExhaustedError,
   InsufficientBalanceError,
   UnsupportedChainError,
   MoreVaultsError,
@@ -185,21 +186,29 @@ export async function preflightRedeemLiquidity(
  *
  * Validates that:
  * 1. The vault is not paused.
- * 2. The vault still has deposit capacity (maxDeposit > 0).
+ * 2. The user still has deposit capacity (maxDeposit(user) > 0).
  *
- * Both reads are executed in parallel.
+ * When maxDeposit(user) returns 0 the function disambiguates the cause:
+ *   - Global capacity exhausted (depositCapacity > 0 && totalAssets >= depositCapacity)
+ *     → throws CapacityFullError
+ *   - User's whitelist quota is 0 (whitelist enabled, user cap spent or never set)
+ *     → throws WhitelistQuotaExhaustedError
+ *
+ * All reads that can run in parallel are batched via Promise.all.
  *
  * @param publicClient  Public client for contract reads
  * @param vault         Vault address (diamond proxy)
+ * @param user          Address that will receive vault shares (used for maxDeposit check)
  */
 export async function preflightSync(
   publicClient: PublicClient,
   vault: Address,
+  user: Address,
 ): Promise<void> {
   const v = getAddress(vault)
 
-  // Run paused and maxDeposit in parallel.
-  // maxDeposit(address(0)) may REVERT on whitelisted vaults — catch separately.
+  // Run paused and maxDeposit(user) in parallel.
+  // maxDeposit may revert on pre-oracle cross-chain vaults — treat as "no cap".
   const [isPaused, depositCapResult] = await Promise.all([
     publicClient.readContract({
       address: v,
@@ -211,7 +220,7 @@ export async function preflightSync(
         address: v,
         abi: CONFIG_ABI,
         functionName: 'maxDeposit',
-        args: [zeroAddress],
+        args: [getAddress(user)],
       })
       .catch(() => null as null),
   ])
@@ -220,10 +229,28 @@ export async function preflightSync(
     throw new VaultPausedError(vault)
   }
 
-  // null means maxDeposit reverted → whitelist vault — skip capacity check
-  // (the user may still be whitelisted; canDeposit will do user-specific check)
-  if (depositCapResult !== null && depositCapResult === 0n) {
-    throw new CapacityFullError(vault)
+  // null → maxDeposit reverted (cross-chain vault without oracle) — skip check.
+  if (depositCapResult === null) return
+
+  if (depositCapResult === 0n) {
+    // Disambiguate: global capacity full vs whitelist quota exhausted.
+    const [capacity, assets] = await Promise.all([
+      publicClient.readContract({
+        address: v,
+        abi: ADMIN_CONFIG_ABI,
+        functionName: 'depositCapacity',
+      }),
+      publicClient.readContract({
+        address: v,
+        abi: VAULT_ABI,
+        functionName: 'totalAssets',
+      }),
+    ])
+
+    if ((capacity as bigint) > 0n && (assets as bigint) >= (capacity as bigint)) {
+      throw new CapacityFullError(vault)
+    }
+    throw new WhitelistQuotaExhaustedError(vault, user)
   }
 }
 

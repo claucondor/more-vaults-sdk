@@ -61,7 +61,7 @@ export async function depositSimple(
   await validateWalletChain(signer, addresses.hubChainId);
 
   // Pre-flight: validate vault is operational and accepting deposits
-  await preflightSync(provider, addresses.vault);
+  await preflightSync(provider, addresses.vault, receiver);
 
   const vault = new Contract(addresses.vault, VAULT_ABI, signer);
   const underlying: string = await vault.asset();

@@ -35,6 +35,13 @@ export class NotWhitelistedError extends MoreVaultsError {
   }
 }
 
+export class WhitelistQuotaExhaustedError extends MoreVaultsError {
+  constructor(vault: string, user: string) {
+    super(`[MoreVaults] Address ${user} has no remaining whitelist deposit quota on vault ${vault}. Ask the vault owner to increase your deposit cap.`)
+    this.name = 'WhitelistQuotaExhaustedError'
+  }
+}
+
 export class InsufficientLiquidityError extends MoreVaultsError {
   hubLiquid: bigint
   required: bigint
