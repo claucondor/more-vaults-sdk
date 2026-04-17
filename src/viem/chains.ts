@@ -267,8 +267,9 @@ export const LZ_TIMEOUTS = {
  *
  * Note on struct differences:
  *   - SwapRouter (Eth/Arb/Op, 0xE592...): exactInputSingle struct includes `deadline`
- *   - SwapRouter02 (Base, 0x2626...): exactInputSingle struct does NOT include `deadline`
- *   - FlowSwap V3 (Flow EVM, 0xeEDC...): derived from original UniV3, includes `deadline`
+ *   - SwapRouter02 (Base/Flow, 0x2626.../0xeEDC...): struct does NOT include `deadline`
+ *     Flow EVM confirmed via PUSH4 scan: router only dispatches 0x04e45aaf (SwapRouter02),
+ *     not 0x414bf389 (SwapRouter). Both are in curatorSwaps.ts SWAP_ROUTER02_CHAINS.
  */
 export const UNISWAP_V3_ROUTERS: Record<number, `0x${string}`> = {
   [8453]:  '0x2626664c2603336E57B271c5C0b26F421741e481', // Base — SwapRouter02 (no deadline)
