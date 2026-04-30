@@ -86,8 +86,8 @@ export async function getSubVaultPositions(
       .catch(() => [] as Address[]),
   ])
 
-  const erc4626Vaults = (erc4626Raw as Address[]).map(getAddress)
-  const erc7540Vaults = (erc7540Raw as Address[]).map(getAddress)
+  const erc4626Vaults = (erc4626Raw as Address[]).map(a => getAddress(a))
+  const erc7540Vaults = (erc7540Raw as Address[]).map(a => getAddress(a))
 
   const allSubVaults: Array<{ address: Address; type: 'erc4626' | 'erc7540' }> = [
     ...erc4626Vaults.map((a) => ({ address: a, type: 'erc4626' as const })),
@@ -465,7 +465,7 @@ export async function getVaultPortfolio(
     ? getAddress(vaultTotals[2].result as Address)
     : zeroAddress
 
-  const availableAddresses = (availableRaw as Address[]).map(getAddress)
+  const availableAddresses = (availableRaw as Address[]).map(a => getAddress(a))
 
   // Sub-vault share addresses to exclude from liquid assets (avoid double-counting)
   const subVaultAddressSet = new Set(subVaultPositions.map((p) => p.address.toLowerCase()))
