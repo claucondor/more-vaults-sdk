@@ -2,6 +2,11 @@
 
 All notable changes to the MoreVaults SDK are documented in this file.
 
+## [1.1.22] - 2026-04-30
+
+### Fixed
+- **`.map(getAddress)` checksum bug** — `Array.prototype.map` passes `(element, index)` to the callback, and viem's `getAddress(addr, chainId?)` then interpreted the index as an EIP-1191 chainId, producing wrong-checksum addresses for items at index ≥ 1. Subsequent `readContract`/`multicall` calls silently rejected those addresses (returning `{ status: 'failure' }` under `allowFailure: true`), so balances appeared as `0` and metadata as defaults (`name=''`, `symbol=''`, `decimals=18`). Fixed in `getVaultPortfolio`, `getVaultAssetBreakdown`, `getCuratorVaultStatus`, `getVaultAnalysis`, `getVaultConfiguration`, `getSubVaultPositions`, and the curator/admin write helpers (`addAvailableAssets`, `setDepositorsCaps`, multicall encoding). The most visible symptom was missing liquid balances on omni-vault spokes — e.g. PYUSD idle on Arbitrum and PYUSD0 idle on Flow hub were not showing in `getVaultPortfolioMultiChain` results.
+
 ## [1.1.0] - 2026-03-18
 
 ### Added

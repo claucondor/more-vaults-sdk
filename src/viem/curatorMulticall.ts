@@ -138,7 +138,7 @@ export function encodeCuratorAction(action: CuratorAction): `0x${string}` {
       return encodeFunctionData({
         abi: ADMIN_WRITE_ABI,
         functionName: 'addAvailableAssets',
-        args: [action.assets.map(getAddress)],
+        args: [action.assets.map(a => getAddress(a))],
       })
 
     case 'disableAssetToDeposit':

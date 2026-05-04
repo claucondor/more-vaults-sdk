@@ -55,7 +55,7 @@ export async function getCuratorVaultStatus(
     timeLockPeriod,
     maxSlippagePercent,
     currentNonce,
-    availableAssets: availableAssets.map(getAddress),
+    availableAssets: availableAssets.map(a => getAddress(a)),
     lzAdapter: getAddress(lzAdapter),
     paused,
   }
@@ -177,8 +177,8 @@ export async function getVaultAnalysis(
       }).catch(() => null),
     ])
 
-  const availableAddresses = (availableRaw as Address[]).map(getAddress)
-  const depositableAddresses = (depositableRaw as Address[]).map(getAddress)
+  const availableAddresses = (availableRaw as Address[]).map(a => getAddress(a))
+  const depositableAddresses = (depositableRaw as Address[]).map(a => getAddress(a))
 
   // Deduplicated set of all asset addresses we need metadata for
   const allAddresses = Array.from(new Set([...availableAddresses, ...depositableAddresses]))
@@ -302,7 +302,7 @@ export async function getVaultAssetBreakdown(
     return { assets: [], totalAssets: 0n, totalSupply: 0n, underlyingDecimals: 6 }
   }
 
-  const addresses = availableRaw.map(getAddress)
+  const addresses = availableRaw.map(a => getAddress(a))
 
   // Step 2: multicall — balanceOf + metadata for each asset + totalAssets + totalSupply + vault decimals
   const results = await publicClient.multicall({

@@ -126,7 +126,7 @@ export async function addAvailableAssets(
 ): Promise<{ txHash: `0x${string}` }> {
   const account = walletClient.account!
   const v = getAddress(vault)
-  const checksummed = assets.map(getAddress)
+  const checksummed = assets.map(a => getAddress(a))
 
   try {
     await publicClient.simulateContract({
@@ -268,7 +268,7 @@ export async function setDepositWhitelist(
     throw new InvalidInputError('depositors and caps arrays must have the same length')
   }
 
-  const checksummed = depositors.map(getAddress)
+  const checksummed = depositors.map(a => getAddress(a))
 
   try {
     await publicClient.simulateContract({

@@ -93,7 +93,7 @@ export async function getVaultConfiguration(
   const num_ = (i: number): number =>
     results[i].status === 'success' ? Number(results[i].result) : 0
   const addrArray = (i: number): Address[] =>
-    results[i].status === 'success' ? (results[i].result as Address[]).map(getAddress) : []
+    results[i].status === 'success' ? (results[i].result as Address[]).map(a => getAddress(a)) : []
 
   return {
     // Roles
