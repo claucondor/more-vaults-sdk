@@ -15,7 +15,7 @@ import {
 } from "./types";
 import type { ContractTransactionReceipt } from "ethers";
 import { preflightAsync, preflightRedeemLiquidity } from "./preflight";
-import { EscrowNotConfiguredError, InvalidInputError, VaultPausedError, WithdrawalTimelockActiveError } from "./errors";
+import { EscrowNotConfiguredError, InvalidInputError, VaultPausedError, WithdrawalTimelockActiveError, WithdrawalQueueDisabledError } from "./errors";
 import { validateWalletChain } from "./chainValidation";
 import { getVaultStatus, quoteLzFee, detectStargateOft } from "./utils";
 import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
@@ -158,6 +158,16 @@ export async function requestRedeem(
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
+
+  // Pre-check: vault must have withdrawal queue enabled — otherwise the contract
+  // reverts with WithdrawalQueueDisabled (0xdbb22fbf). Use redeemShares directly
+  // or smartRedeem which auto-selects the correct flow.
+  const provider = signer.provider!
+  const configRead = new Contract(addresses.vault, ['function getWithdrawalQueueStatus() view returns (bool)'], provider)
+  const queueEnabled: boolean = await configRead.getWithdrawalQueueStatus()
+  if (!queueEnabled) {
+    throw new WithdrawalQueueDisabledError(addresses.vault)
+  }
 
   // Detect which signature the vault supports: new (uint256, address) or legacy (uint256)
   let useLegacy = false

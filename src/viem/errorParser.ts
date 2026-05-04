@@ -10,6 +10,7 @@ import {
   NoSuchActionsError,
   CapacityFullError,
   InvalidInputError,
+  WithdrawalQueueDisabledError,
 } from './errors.js'
 
 /**
@@ -43,6 +44,13 @@ export function parseContractError(err: unknown, vault: string, caller?: string)
   // Pause check
   if (msg.includes('EnforcedPause') || msg.includes('Pausable: paused')) {
     throw new VaultPausedError(vault)
+  }
+
+  // Withdrawal queue disabled — caller used requestRedeem/requestWithdraw on a vault
+  // where the queue is off. Should use redeemShares/withdrawAssets directly, or smartRedeem.
+  // 0xdbb22fbf is the selector for WithdrawalQueueDisabled().
+  if (msg.includes('WithdrawalQueueDisabled') || msg.includes('0xdbb22fbf')) {
+    throw new WithdrawalQueueDisabledError(vault)
   }
 
   // Role checks

@@ -18,7 +18,7 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee, detectStargateOft } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
-import { EscrowNotConfiguredError, VaultPausedError, InvalidInputError, WithdrawalTimelockActiveError } from './errors'
+import { EscrowNotConfiguredError, VaultPausedError, InvalidInputError, WithdrawalTimelockActiveError, WithdrawalQueueDisabledError } from './errors'
 import { validateWalletChain } from './chainValidation'
 import { parseContractError } from './errorParser'
 import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
@@ -174,6 +174,18 @@ export async function requestRedeem(
 
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
+
+  // Pre-check: vault must have withdrawal queue enabled — otherwise the contract
+  // reverts with WithdrawalQueueDisabled (0xdbb22fbf). Use redeemShares directly
+  // or smartRedeem which auto-selects the correct flow.
+  const queueEnabled = await publicClient.readContract({
+    address: vault,
+    abi: CONFIG_ABI,
+    functionName: 'getWithdrawalQueueStatus',
+  })
+  if (!queueEnabled) {
+    throw new WithdrawalQueueDisabledError(vault)
+  }
 
   // Detect which signature the vault supports: new (uint256, address) or legacy (uint256)
   let useLegacy = false

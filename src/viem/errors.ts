@@ -42,6 +42,13 @@ export class WhitelistQuotaExhaustedError extends MoreVaultsError {
   }
 }
 
+export class WithdrawalQueueDisabledError extends MoreVaultsError {
+  constructor(vault: string) {
+    super(`[MoreVaults] Withdrawal queue is disabled on vault ${vault}. Cannot call requestRedeem/requestWithdraw — use redeemShares/withdrawAssets directly, or smartRedeem which auto-selects the correct flow.`)
+    this.name = 'WithdrawalQueueDisabledError'
+  }
+}
+
 export class InsufficientLiquidityError extends MoreVaultsError {
   hubLiquid: bigint
   required: bigint

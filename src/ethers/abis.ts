@@ -4,6 +4,11 @@
  */
 
 export const VAULT_ABI = [
+  // Errors (for proper revert decoding)
+  "error WithdrawalQueueDisabled()",
+  "error WithdrawalQueueEnabled()",
+  "error RequestWithdrawDisabled()",
+
   // ERC4626 core
   "function deposit(uint256 assets, address receiver) returns (uint256 shares)",
   "function mint(uint256 shares, address receiver) returns (uint256 assets)",

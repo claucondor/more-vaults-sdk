@@ -93,6 +93,7 @@ export {
   ComposeTimeoutError,
   ComposeAlreadyExecutedError,
   WithdrawalTimelockActiveError,
+  WithdrawalQueueDisabledError,
 } from "./errors";
 
 // --- Deposit flows ---

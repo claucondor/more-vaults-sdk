@@ -4,6 +4,10 @@
  */
 
 export const VAULT_ABI = [
+  // ── Errors (for proper revert decoding) ──
+  { type: 'error', name: 'WithdrawalQueueDisabled', inputs: [] },
+  { type: 'error', name: 'WithdrawalQueueEnabled', inputs: [] },
+  { type: 'error', name: 'RequestWithdrawDisabled', inputs: [] },
   {
     type: 'function',
     name: 'deposit',
