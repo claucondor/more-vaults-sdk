@@ -49,6 +49,13 @@ export class WithdrawalQueueDisabledError extends MoreVaultsError {
   }
 }
 
+export class CantProcessWithdrawRequestError extends MoreVaultsError {
+  constructor(vault: string) {
+    super(`[MoreVaults] Cannot process withdraw on vault ${vault}: the withdrawal queue is enabled and there is no valid pending request, or its timelock has not expired. Call requestRedeem first and wait for the timelock, or use smartRedeem which handles the full lifecycle.`)
+    this.name = 'CantProcessWithdrawRequestError'
+  }
+}
+
 export class InsufficientLiquidityError extends MoreVaultsError {
   hubLiquid: bigint
   required: bigint

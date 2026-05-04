@@ -8,6 +8,8 @@ export const VAULT_ABI = [
   { type: 'error', name: 'WithdrawalQueueDisabled', inputs: [] },
   { type: 'error', name: 'WithdrawalQueueEnabled', inputs: [] },
   { type: 'error', name: 'RequestWithdrawDisabled', inputs: [] },
+  { type: 'error', name: 'CantProcessWithdrawRequest', inputs: [] },
+  { type: 'error', name: 'FunctionDoesNotExist', inputs: [] },
   {
     type: 'function',
     name: 'deposit',

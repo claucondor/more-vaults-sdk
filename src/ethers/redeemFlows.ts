@@ -159,14 +159,19 @@ export async function requestRedeem(
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   await validateWalletChain(signer, addresses.hubChainId);
 
-  // Pre-check: vault must have withdrawal queue enabled — otherwise the contract
-  // reverts with WithdrawalQueueDisabled (0xdbb22fbf). Use redeemShares directly
-  // or smartRedeem which auto-selects the correct flow.
-  const provider = signer.provider!
-  const configRead = new Contract(addresses.vault, ['function getWithdrawalQueueStatus() view returns (bool)'], provider)
-  const queueEnabled: boolean = await configRead.getWithdrawalQueueStatus()
-  if (!queueEnabled) {
-    throw new WithdrawalQueueDisabledError(addresses.vault)
+  // Pre-check: if the vault has getWithdrawalQueueStatus, verify queue is enabled
+  // before wasting a simulation. Older vaults (FunctionDoesNotExist) skip this
+  // check and let the contract revert with the proper error if needed.
+  try {
+    const provider = signer.provider!
+    const configRead = new Contract(addresses.vault, ['function getWithdrawalQueueStatus() view returns (bool)'], provider)
+    const queueEnabled: boolean = await configRead.getWithdrawalQueueStatus()
+    if (!queueEnabled) {
+      throw new WithdrawalQueueDisabledError(addresses.vault)
+    }
+  } catch (err) {
+    if (err instanceof WithdrawalQueueDisabledError) throw err
+    // FunctionDoesNotExist or any read failure — older vault, skip pre-check
   }
 
   // Detect which signature the vault supports: new (uint256, address) or legacy (uint256)

@@ -90,6 +90,7 @@ export {
   ComposeAlreadyExecutedError,
   WithdrawalTimelockActiveError,
   WithdrawalQueueDisabledError,
+  CantProcessWithdrawRequestError,
 } from './errors'
 
 // --- Deposit Flows ---

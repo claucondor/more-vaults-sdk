@@ -11,6 +11,7 @@ import {
   CapacityFullError,
   InvalidInputError,
   WithdrawalQueueDisabledError,
+  CantProcessWithdrawRequestError,
 } from './errors.js'
 
 /**
@@ -52,6 +53,10 @@ export function parseContractError(err: unknown, vault: string, caller?: string)
   // 0xdbb22fbf is the selector for WithdrawalQueueDisabled().
   if (msg.includes('WithdrawalQueueDisabled') || msg.includes('0xdbb22fbf')) {
     throw new WithdrawalQueueDisabledError(vault)
+  }
+
+  if (msg.includes('CantProcessWithdrawRequest') || msg.includes('0x8cbe9e8b')) {
+    throw new CantProcessWithdrawRequestError(vault)
   }
 
   // Role checks

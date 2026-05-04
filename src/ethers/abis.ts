@@ -8,6 +8,8 @@ export const VAULT_ABI = [
   "error WithdrawalQueueDisabled()",
   "error WithdrawalQueueEnabled()",
   "error RequestWithdrawDisabled()",
+  "error CantProcessWithdrawRequest()",
+  "error FunctionDoesNotExist()",
 
   // ERC4626 core
   "function deposit(uint256 assets, address receiver) returns (uint256 shares)",

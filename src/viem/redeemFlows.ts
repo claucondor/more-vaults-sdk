@@ -18,7 +18,7 @@ import type {
 import { ActionType } from './types'
 import { ensureAllowance, getVaultStatus, quoteLzFee, detectStargateOft } from './utils'
 import { preflightAsync, preflightRedeemLiquidity } from './preflight'
-import { EscrowNotConfiguredError, VaultPausedError, InvalidInputError, WithdrawalTimelockActiveError, WithdrawalQueueDisabledError } from './errors'
+import { EscrowNotConfiguredError, VaultPausedError, InvalidInputError, WithdrawalTimelockActiveError, WithdrawalQueueDisabledError, CantProcessWithdrawRequestError } from './errors'
 import { validateWalletChain } from './chainValidation'
 import { parseContractError } from './errorParser'
 import { OFT_ROUTES, CHAIN_ID_TO_EID } from './chains'
@@ -175,16 +175,21 @@ export async function requestRedeem(
   // Validate wallet is on the correct chain (opt-in via hubChainId)
   validateWalletChain(walletClient, addresses.hubChainId)
 
-  // Pre-check: vault must have withdrawal queue enabled — otherwise the contract
-  // reverts with WithdrawalQueueDisabled (0xdbb22fbf). Use redeemShares directly
-  // or smartRedeem which auto-selects the correct flow.
-  const queueEnabled = await publicClient.readContract({
-    address: vault,
-    abi: CONFIG_ABI,
-    functionName: 'getWithdrawalQueueStatus',
-  })
-  if (!queueEnabled) {
-    throw new WithdrawalQueueDisabledError(vault)
+  // Pre-check: if the vault has getWithdrawalQueueStatus, verify queue is enabled
+  // before wasting a simulation. Older vaults (FunctionDoesNotExist) skip this
+  // check and let the contract revert with the proper error if needed.
+  try {
+    const queueEnabled = await publicClient.readContract({
+      address: vault,
+      abi: CONFIG_ABI,
+      functionName: 'getWithdrawalQueueStatus',
+    })
+    if (!queueEnabled) {
+      throw new WithdrawalQueueDisabledError(vault)
+    }
+  } catch (err) {
+    if (err instanceof WithdrawalQueueDisabledError) throw err
+    // FunctionDoesNotExist or any read failure — older vault, skip pre-check
   }
 
   // Detect which signature the vault supports: new (uint256, address) or legacy (uint256)
@@ -592,8 +597,25 @@ export async function smartRedeem(
     throw new WithdrawalTimelockActiveError(vault, timelockEndsAt, requestTxHash)
   }
 
-  // Sync vault without queue — direct redeem
-  return redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
+  // Sync vault without queue — direct redeem.
+  // Fallback: if redeem reverts with CantProcessWithdrawRequest, the vault has
+  // an internal queue enabled that wasn't readable via getWithdrawalQueueStatus
+  // (older diamond without the function). Re-route to the queue flow.
+  try {
+    return await redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
+  } catch (err) {
+    if (err instanceof CantProcessWithdrawRequestError) {
+      const now = BigInt(Math.floor(Date.now() / 1000))
+      if (status.withdrawalTimelockSeconds === 0n) {
+        await requestRedeem(walletClient, publicClient, addresses, shares, owner)
+        return redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
+      }
+      const { txHash: requestTxHash } = await requestRedeem(walletClient, publicClient, addresses, shares, owner)
+      const timelockEndsAt = now + (status.withdrawalTimelockSeconds || 86400n)
+      throw new WithdrawalTimelockActiveError(vault, timelockEndsAt, requestTxHash)
+    }
+    throw err
+  }
 }
 
 /**
