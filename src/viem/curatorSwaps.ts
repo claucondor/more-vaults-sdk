@@ -10,7 +10,7 @@
  *   - Ethereum (1):       SwapRouter   0xE592...  — HAS deadline field
  *   - Arbitrum (42161):   SwapRouter   0xE592...  — HAS deadline field
  *   - Optimism (10):      SwapRouter   0xE592...  — HAS deadline field
- *   - Flow EVM (747):     FlowSwap V3  0xeEDC...  — HAS deadline field
+ *   - Flow EVM (747):     FlowSwap V3  0xeEDC...  — NO deadline field (SwapRouter02-compatible)
  *
  * @module curatorSwaps
  */
@@ -89,8 +89,10 @@ const UNISWAP_V3_SWAP_ROUTER02_ABI = [
 /**
  * Chains that use SwapRouter02 (no deadline in struct).
  * All other chains in UNISWAP_V3_ROUTERS use the original SwapRouter.
+ *
+ * Flow EVM (747): FlowSwap V3 router exposes exactInputSingle with selector 0x04e45aaf
  */
-const SWAP_ROUTER02_CHAINS = new Set([8453])
+const SWAP_ROUTER02_CHAINS = new Set([8453, 747])
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Calldata encoding
