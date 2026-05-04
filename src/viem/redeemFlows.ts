@@ -605,14 +605,17 @@ export async function smartRedeem(
     return await redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
   } catch (err) {
     if (err instanceof CantProcessWithdrawRequestError) {
-      const now = BigInt(Math.floor(Date.now() / 1000))
-      if (status.withdrawalTimelockSeconds === 0n) {
-        await requestRedeem(walletClient, publicClient, addresses, shares, owner)
-        return redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
-      }
+      // Submit the request and read the actual timelockEndsAt from the contract
+      // (do NOT rely on status.withdrawalTimelockSeconds — it may be 0 because
+      // getWithdrawalTimelock() reverted on older vaults).
       const { txHash: requestTxHash } = await requestRedeem(walletClient, publicClient, addresses, shares, owner)
-      const timelockEndsAt = now + (status.withdrawalTimelockSeconds || 86400n)
-      throw new WithdrawalTimelockActiveError(vault, timelockEndsAt, requestTxHash)
+      const pending = await getWithdrawalRequest(publicClient, vault, owner)
+      const now = BigInt(Math.floor(Date.now() / 1000))
+      if (pending && pending.timelockEndsAt > now) {
+        throw new WithdrawalTimelockActiveError(vault, pending.timelockEndsAt, requestTxHash)
+      }
+      // Timelock is 0 or already expired — redeem immediately
+      return redeemShares(walletClient, publicClient, addresses, shares, receiver, owner)
     }
     throw err
   }
