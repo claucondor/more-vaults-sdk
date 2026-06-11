@@ -2,7 +2,7 @@
 // Barrel export for all flows and utilities.
 
 // --- Chain constants ---
-export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, LZ_TIMEOUTS } from "./chains";
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, LZ_TIMEOUTS, DEFAULT_LZ_ENDPOINT, LZ_ENDPOINT_BY_CHAIN, getLzEndpoint } from "./chains";
 
 // --- Types ---
 export type {

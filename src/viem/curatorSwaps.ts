@@ -155,7 +155,7 @@ export function encodeUniswapV3SwapCalldata(params: {
       ],
     })
   } else {
-    // Original SwapRouter (Eth/Arb/Op/Flow EVM) — has deadline field
+    // Original SwapRouter (Eth/Arb/Op) — has deadline field
     const deadline = BigInt(Math.floor(Date.now() / 1000) + 1200) // now + 20 minutes
     swapCallData = encodeFunctionData({
       abi: UNISWAP_V3_SWAP_ROUTER_ABI,

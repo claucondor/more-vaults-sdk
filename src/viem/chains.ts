@@ -279,6 +279,26 @@ export const UNISWAP_V3_ROUTERS: Record<number, `0x${string}`> = {
   [747]:   '0xeEDC6Ff75e1b10B903D9013c358e446a73d35341',  // Flow EVM — FlowSwap V3 SwapRouter
 }
 
+/**
+ * LayerZero V2 EndpointV2 address per chain.
+ *
+ * Most EVM chains deploy EndpointV2 at the canonical address 0x1a44...
+ * but Flow EVM uses a chain-specific address.
+ *
+ * Verified: Flow EVM endpoint confirmed as 0xcb566e3b... from ComposeSent event
+ * emitter on-chain (block 67081745, TX 0x9322ed...). The canonical address
+ * 0x1a44... has no code on Flow EVM.
+ */
+export const DEFAULT_LZ_ENDPOINT = '0x1a44076050125825900e736c501f859c50fe728c' as `0x${string}`
+export const LZ_ENDPOINT_BY_CHAIN: Partial<Record<number, `0x${string}`>> = {
+  [CHAIN_IDS.flowEVMMainnet]: '0xcb566e3b6934fa77258d68ea18e931fa75e1aaaa',
+}
+
+/** Returns the LZ EndpointV2 address for a given EVM chain ID. */
+export function getLzEndpoint(chainId: number): `0x${string}` {
+  return LZ_ENDPOINT_BY_CHAIN[chainId] ?? DEFAULT_LZ_ENDPOINT
+}
+
 // ---------------------------------------------------------------------------
 // Legacy flat exports — kept for backwards compat, prefer OFT_ROUTES
 // ---------------------------------------------------------------------------

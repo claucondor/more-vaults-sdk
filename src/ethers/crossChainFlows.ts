@@ -1,13 +1,13 @@
 import { Contract, AbiCoder, zeroPadValue, Signer, Provider } from "ethers";
 import { ERC20_ABI, OFT_ABI, BRIDGE_ABI, LZ_ENDPOINT_ABI } from "./abis";
 import type { ContractTransactionReceipt } from "ethers";
-import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider } from "./chains";
+import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider, getLzEndpoint, DEFAULT_LZ_ENDPOINT } from "./chains";
 import { detectStargateOft } from "./utils";
 import { OMNI_FACTORY_ADDRESS } from "./topology";
 import { ComposerNotConfiguredError, InvalidInputError, ComposeAlreadyExecutedError } from "./errors";
 
-/** LZ Endpoint V2 address — same on all EVM chains */
-const LZ_ENDPOINT = "0x1a44076050125825900e736c501f859c50fe728c";
+/** @deprecated use getLzEndpoint(chainId) — endpoint differs on Flow EVM */
+const LZ_ENDPOINT = DEFAULT_LZ_ENDPOINT;
 
 const EMPTY_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const RECEIVED_HASH = "0x0000000000000000000000000000000000000000000000000000000000000001";
@@ -298,8 +298,10 @@ export async function executeCompose(
   message: string,
   fee: bigint,
   index: number = 0,
+  hubChainId?: number,
 ): Promise<{ receipt: ContractTransactionReceipt }> {
-  const endpoint = new Contract(LZ_ENDPOINT, LZ_ENDPOINT_ABI, signer);
+  const endpointAddr = hubChainId ? getLzEndpoint(hubChainId) : LZ_ENDPOINT;
+  const endpoint = new Contract(endpointAddr, LZ_ENDPOINT_ABI, signer);
 
   // Verify compose is still pending
   const hash: string = await endpoint.composeQueue(from, to, guid, index);
