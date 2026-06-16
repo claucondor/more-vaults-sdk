@@ -7,6 +7,7 @@ import {
   zeroAddress,
 } from 'viem'
 import { VAULT_ABI, BRIDGE_ABI, ERC20_ABI, CONFIG_ABI } from './abis'
+import { applyGasBuffer } from '../common/gasBuffer.js'
 import type {
   VaultAddresses,
   DepositResult,
@@ -250,7 +251,7 @@ export async function depositAsync(
   }
 
   // LZ Read operations consistently underestimate gas — add 30% buffer.
-  const gas = gasEstimate! * 130n / 100n
+  const gas = applyGasBuffer(gasEstimate!)
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -354,7 +355,7 @@ export async function mintAsync(
     parseContractError(err, vault, account.address)
   }
 
-  const gas = gasEstimate! * 130n / 100n
+  const gas = applyGasBuffer(gasEstimate!)
 
   const txHash = await walletClient.writeContract({
     address: vault,

@@ -21,6 +21,7 @@ import { getVaultStatus, quoteLzFee, detectStargateOft } from "./utils";
 import { CHAIN_ID_TO_EID, OFT_ROUTES, createChainProvider } from "./chains";
 import { OMNI_FACTORY_ADDRESS } from "./topology";
 import { parseContractError } from "./errorParser";
+import { applyGasBuffer } from "../common/gasBuffer.js";
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -432,7 +433,7 @@ export async function estimateRedeemCost(
         ActionType.REDEEM, actionCallData, 0n, extraOptions,
         { value: lzFee, from: owner },
       );
-      requestGas = (BigInt(raw.toString()) * 130n) / 100n;
+      requestGas = applyGasBuffer(BigInt(raw.toString()));
     } catch { /* return 0 if simulation fails */ }
 
     const approveGas = 60_000n;

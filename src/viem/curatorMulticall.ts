@@ -32,6 +32,7 @@ import type {
 } from './types.js'
 import { InvalidInputError } from './errors.js'
 import { parseContractError } from './errorParser.js'
+import { applyGasBuffer } from '../common/gasBuffer.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Encoding helpers
@@ -338,7 +339,7 @@ export async function submitActions(
       args: [actions],
       account: account.address,
     })
-    gasLimit = (estimated * 130n) / 100n
+    gasLimit = applyGasBuffer(estimated)
   } catch { /* fall back to auto-estimate */ }
 
   const txHash = await walletClient.writeContract({
@@ -412,7 +413,7 @@ export async function executeActions(
       args: [nonce],
       account: account.address,
     })
-    gasLimit = (estimated * 130n) / 100n
+    gasLimit = applyGasBuffer(estimated)
   } catch { /* fall back to auto-estimate */ }
 
   const txHash = await walletClient.writeContract({
