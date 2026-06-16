@@ -2,7 +2,7 @@
 // Barrel export for all flows and utilities.
 
 // --- Chain constants ---
-export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, LZ_TIMEOUTS } from "./chains";
+export { CHAIN_IDS, LZ_EIDS, EID_TO_CHAIN_ID, CHAIN_ID_TO_EID, LZ_TIMEOUTS, DEFAULT_LZ_ENDPOINT, LZ_ENDPOINT_BY_CHAIN, getLzEndpoint } from "./chains";
 
 // --- Types ---
 export type {
@@ -115,6 +115,12 @@ export {
   quoteComposeFee,
   executeCompose,
   waitForCompose,
+  findComposeByGuid,
+  listPendingComposes,
+  decodeComposeMessage,
+  COMPOSE_SCAN_WINDOW_BLOCKS,
+  COMPOSE_SCAN_CHUNK_SIZE,
+  EXECUTE_COMPOSE_GAS_LIMIT,
 } from "./crossChainFlows";
 
 // --- Redeem flows ---

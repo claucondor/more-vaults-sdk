@@ -3,6 +3,7 @@ import {
   type Hash,
   type PublicClient,
   type WalletClient,
+  decodeAbiParameters,
   encodeAbiParameters,
   getAddress,
   pad,
@@ -11,7 +12,7 @@ import {
 import { OFT_ABI, BRIDGE_ABI, LZ_ENDPOINT_ABI } from './abis'
 import type { ComposeData, SpokeDepositResult } from './types'
 import { ensureAllowance, detectStargateOft } from './utils'
-import { OFT_ROUTES, EID_TO_CHAIN_ID } from './chains'
+import { OFT_ROUTES, EID_TO_CHAIN_ID, getLzEndpoint } from './chains'
 import { OMNI_FACTORY_ADDRESS } from './topology'
 import { createChainClient } from './spokeRoutes'
 import { ComposerNotConfiguredError, InvalidInputError, ComposeAlreadyExecutedError } from './errors'
@@ -23,17 +24,19 @@ function isNativeDropCapError(e: unknown): boolean {
   return String(e).includes('0x0084ce02')
 }
 
-/** LZ Endpoint V2 address — standard deployment, used on most EVM chains */
-const LZ_ENDPOINT = '0x1a44076050125825900e736c501f859c50fe728c' as const
+// ── Tunable defaults for cross-chain compose flows ───────────────────────────
+// These preserve the SDK's existing behaviour. They are exported so callers can
+// reference them, and the flows below accept per-call overrides where relevant.
 
-/** Chain-specific LZ Endpoint overrides (some chains deploy at a different address) */
-const LZ_ENDPOINT_BY_CHAIN: Record<number, `0x${string}`> = {
-  747: '0xcb566e3B6934Fa77258d68ea18E931fa75e1aaAa', // Flow EVM
-}
+/** Gas limit injected into the LZ compose option for standard (non-Stargate) OFT deposits. */
+export const COMPOSE_GAS_LIMIT = 2_000_000n
+/** When the hub read fee can't be quoted, assume it is at most this multiple of the share-send fee. */
+export const READ_FEE_FALLBACK_MULTIPLIER = 3n
+/** Default block-range window scanned backwards when no `fromBlock` is given. */
+export const COMPOSE_SCAN_WINDOW_BLOCKS = 200_000n
+/** Block chunk size per `getLogs` call when scanning `ComposeSent` events. */
+export const COMPOSE_SCAN_CHUNK_SIZE = 2_000n
 
-function getLzEndpoint(chainId: number): `0x${string}` {
-  return LZ_ENDPOINT_BY_CHAIN[chainId] ?? LZ_ENDPOINT
-}
 
 const FACTORY_COMPOSER_ABI = [
   {
@@ -105,7 +108,11 @@ async function resolveComposeNativeValue(
     }),
   ])
 
-  const readFee = readFeeResult.status === 'fulfilled' ? readFeeResult.value as bigint : 0n
+  const readFeeOk = readFeeResult.status === 'fulfilled'
+  const readFee = readFeeOk ? readFeeResult.value as bigint : 0n
+  if (!readFeeOk) {
+    console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteAccountingFee failed — RPC may be unreliable; readFee will be estimated conservatively')
+  }
 
   if (readFeeResult.status === 'rejected') {
     console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteAccountingFee failed', readFeeResult.reason)
@@ -131,11 +138,15 @@ async function resolveComposeNativeValue(
           oftCmd: '0x' as `0x${string}`,
         }, false],
       }) as { nativeFee: bigint }
-      console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteSend ok', feeQuote.nativeFee)
-      return readFee + feeQuote.nativeFee
-    } catch (e) {
-      console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteSend failed, using fallback', e)
-    }
+      const shareSendFee = feeQuote.nativeFee
+      // If readFee couldn't be quoted, assume it could be up to 3x the share send fee
+      // (covers D7 LZ Read cost which tends to be 2-3x the OFT send fee on Flow EVM)
+      const conservativeReadFee = readFeeOk ? readFee : shareSendFee * READ_FEE_FALLBACK_MULTIPLIER
+      const total = conservativeReadFee + shareSendFee
+      if (total > 0n) return total
+      // Both fees returned 0 — fall through to the floor fallback below
+      console.warn('[more-vaults-sdk] resolveComposeNativeValue: quoteSend returned 0 fees — using floor fallback')
+    } catch { /* fall through to default */ }
   }
 
   // Fallback: readFee covers _initDeposit; multiply for share send buffer
@@ -182,7 +193,7 @@ function resolveOftCmd(_oft: Address): `0x${string}` {
  *   execute a 2nd TX on the hub: `waitForCompose()` → `executeCompose()`.
  *   Returns `composeData` for the caller to handle.
  *
- * - **Standard OFT** (non-Stargate): SDK injects `buildLzComposeOption(500_000 gas,
+ * - **Standard OFT** (non-Stargate): SDK injects `buildLzComposeOption(2_000_000 gas,
  *   nativeValue)` into extraOptions. The LZ executor forwards ETH to the compose
  *   call automatically → compose executes in 1 TX, no retry needed.
  *   Returns `composeData = undefined`.
@@ -230,7 +241,7 @@ export async function depositFromSpoke(
   minSharesOut: bigint = 0n,
   minAmountLD?: bigint,
   extraOptions: `0x${string}` = '0x',
-  options?: { storage?: FlowStorage | null },
+  options?: { storage?: FlowStorage | null; composeGasLimit?: bigint },
 ): Promise<SpokeDepositResult> {
   const account = walletClient.account!
   const oft = getAddress(spokeOFT)
@@ -292,7 +303,7 @@ export async function depositFromSpoke(
       hubClient, vault, composerAddress, spokeEid, pad(getAddress(receiver), { size: 32 }),
     )
     resolvedExtraOptions = composeNativeValue > 0n
-      ? buildLzComposeOption(500_000n, composeNativeValue)
+      ? buildLzComposeOption(options?.composeGasLimit ?? COMPOSE_GAS_LIMIT, composeNativeValue)
       : '0x' as `0x${string}`
   } else {
     resolvedExtraOptions = '0x' as `0x${string}`
@@ -343,10 +354,19 @@ export async function depositFromSpoke(
       })
     } catch (e) {
       if (isNativeDropCapError(e)) {
+        console.warn('[more-vaults-sdk] depositFromSpoke: OFT executor NativeDropAmountCap — native drop rejected; falling back to pending-compose mode (TX2 required)')
         resolvedExtraOptions = '0x'
         needsPendingCompose = true
       }
     }
+  }
+
+  // If composeNativeValue resolved to 0 (both fee quotes returned 0), the compose will
+  // receive no ETH and cannot pay for SHARE_OFT.send. Force pending-compose so the user
+  // executes TX2 with a proper fee rather than sending a compose that will always fail.
+  if (!isStargate && resolvedExtraOptions === '0x' && !needsPendingCompose) {
+    console.warn('[more-vaults-sdk] depositFromSpoke: composeNativeValue is 0 — compose cannot pay share-send fee; forcing pending-compose mode (TX2 required)')
+    needsPendingCompose = true
   }
 
   // For OFTAdapters (e.g. Stargate) fees are deducted on transfer — quoteOFT tells us
@@ -497,6 +517,7 @@ export async function quoteDepositFromSpokeFee(
   minSharesOut: bigint = 0n,
   minAmountLD?: bigint,
   extraOptions: `0x${string}` = '0x',
+  options?: { composeGasLimit?: bigint },
 ): Promise<bigint> {
   const oft = getAddress(spokeOFT)
   const resolvedOftCmd = resolveOftCmd(oft)
@@ -523,7 +544,7 @@ export async function quoteDepositFromSpokeFee(
       hubClient, vault, composerAddress, spokeEid, receiverBytes32 as `0x${string}`,
     )
     resolvedExtraOptions = composeNativeValue > 0n
-      ? buildLzComposeOption(500_000n, composeNativeValue)
+      ? buildLzComposeOption(options?.composeGasLimit ?? COMPOSE_GAS_LIMIT, composeNativeValue)
       : '0x' as `0x${string}`
   } else {
     resolvedExtraOptions = '0x' as `0x${string}`
@@ -789,6 +810,223 @@ export async function waitForCompose(
   }
 
   throw new Error(`Timeout waiting for compose after ${timeoutMs / 60_000} min. Scanned blocks ${startBlock}→${scannedUpTo}. Check LayerZero scan for composer ${composer}.`)
+}
+
+const COMPOSE_SENT_EVENT = {
+  type: 'event' as const,
+  name: 'ComposeSent',
+  inputs: [
+    { name: 'from',    type: 'address' as const, indexed: false },
+    { name: 'to',      type: 'address' as const, indexed: false },
+    { name: 'guid',    type: 'bytes32' as const, indexed: false },
+    { name: 'index',   type: 'uint16'  as const, indexed: false },
+    { name: 'message', type: 'bytes'   as const, indexed: false },
+  ],
+}
+
+/**
+ * Decode the OFTComposeMsgCodec message bytes from a ComposeSent event.
+ *
+ * Layout (bytes):
+ *   0–7   amountSD (uint64)
+ *   8–11  srcEid   (uint32)
+ *  12–43  amountLD (uint256)
+ *  44–75  composeFrom (bytes32, last 20 = depositor address)
+ *  76+    composeMsgPayload = abi.encode(SendParam, uint256 minMsgValue)
+ *
+ * The SendParam inside composeMsgPayload carries dstEid (spoke EID) and
+ * to (bytes32, last 20 = receiver address on spoke).
+ */
+export function decodeComposeMessage(message: `0x${string}`): {
+  srcEid: number
+  amountLD: bigint
+  depositor: Address
+  dstEid?: number
+  receiver?: Address
+} {
+  const hex = message.startsWith('0x') ? message.slice(2) : message
+  const srcEid  = parseInt(hex.slice(16, 24), 16)             // bytes 8–11
+  const amountLD = BigInt('0x' + hex.slice(24, 88))           // bytes 12–43
+  const depositor = getAddress('0x' + hex.slice(112, 152))    // bytes 44–75, last 20
+
+  let dstEid: number | undefined
+  let receiver: Address | undefined
+  try {
+    const payload = `0x${hex.slice(152)}` as `0x${string}`    // bytes 76+
+    const [sendParam] = decodeAbiParameters([{
+      name: 'sendParam',
+      type: 'tuple',
+      components: [
+        { name: 'dstEid',       type: 'uint32'  },
+        { name: 'to',           type: 'bytes32' },
+        { name: 'amountLD',     type: 'uint256' },
+        { name: 'minAmountLD',  type: 'uint256' },
+        { name: 'extraOptions', type: 'bytes'   },
+        { name: 'composeMsg',   type: 'bytes'   },
+        { name: 'oftCmd',       type: 'bytes'   },
+      ],
+    }, { name: 'minMsgValue', type: 'uint256' }], payload)
+    dstEid   = Number(sendParam.dstEid)
+    receiver = getAddress('0x' + sendParam.to.slice(26))      // last 20 bytes of bytes32
+  } catch { /* leave undefined */ }
+
+  return { srcEid, amountLD, depositor, dstEid, receiver }
+}
+
+/**
+ * Find a specific pending compose on the hub chain by GUID.
+ *
+ * Scans `ComposeSent` events on the LZ Endpoint until it finds an event
+ * matching the given GUID directed at `composer`, then verifies the compose
+ * is still pending in `composeQueue`.
+ *
+ * @param hubPublicClient  Public client on the hub chain
+ * @param endpoint         LZ EndpointV2 address on the hub
+ * @param composer         MoreVaultsComposer address on the hub
+ * @param guid             The LZ GUID to locate (0x-prefixed hex)
+ * @param fromBlock        Block to start scanning from (default: last 200k blocks)
+ * @param hubChainId       Hub chain ID embedded in returned ComposeData (fetched if omitted)
+ * @throws {ComposeAlreadyExecutedError} If the compose was already executed
+ * @throws {Error} If the GUID is not found in the scanned block range
+ */
+export async function findComposeByGuid(
+  hubPublicClient: PublicClient,
+  endpoint: Address,
+  composer: Address,
+  guid: `0x${string}`,
+  fromBlock?: bigint,
+  hubChainId?: number,
+  chunkSize: bigint = COMPOSE_SCAN_CHUNK_SIZE,
+): Promise<ComposeData> {
+  const currentBlock = await hubPublicClient.getBlockNumber()
+  const scanFrom = fromBlock ?? (currentBlock > COMPOSE_SCAN_WINDOW_BLOCKS ? currentBlock - COMPOSE_SCAN_WINDOW_BLOCKS : 0n)
+
+  let from = scanFrom
+  while (from <= currentBlock) {
+    const chunkEnd = from + chunkSize > currentBlock ? currentBlock : from + chunkSize
+
+    const logs = await hubPublicClient.getLogs({
+      address: endpoint,
+      events: [COMPOSE_SENT_EVENT],
+      fromBlock: from,
+      toBlock: chunkEnd,
+    })
+
+    for (const log of logs) {
+      const args = log.args as { from?: Address; to?: Address; guid?: `0x${string}`; index?: number; message?: `0x${string}` }
+      if (
+        args.guid?.toLowerCase() === guid.toLowerCase() &&
+        args.to && getAddress(args.to) === getAddress(composer)
+      ) {
+        const hash = await hubPublicClient.readContract({
+          address: endpoint,
+          abi: LZ_ENDPOINT_ABI,
+          functionName: 'composeQueue',
+          args: [getAddress(args.from!), getAddress(composer), guid, args.index ?? 0],
+        })
+        if (hash === RECEIVED_HASH) throw new ComposeAlreadyExecutedError()
+        if (hash === EMPTY_HASH) {
+          throw new Error(`Compose ${guid} found in events but composeQueue hash is empty — may have been cleared externally.`)
+        }
+        const chainId = hubChainId ?? await hubPublicClient.getChainId()
+        return {
+          endpoint,
+          from:         getAddress(args.from!),
+          to:           getAddress(composer),
+          guid,
+          index:        args.index ?? 0,
+          message:      args.message!,
+          isStargate:   false,
+          hubChainId:   chainId,
+          hubBlockStart: scanFrom,
+        }
+      }
+    }
+
+    from = chunkEnd + 1n
+  }
+
+  throw new Error(
+    `Compose GUID ${guid} not found in ComposeSent events on blocks ${scanFrom}→${currentBlock}. ` +
+    `Pass a lower fromBlock to scan further back.`,
+  )
+}
+
+/**
+ * Scan the hub LZ Endpoint for all pending (unexecuted) composes directed at a composer.
+ *
+ * Returns every `ComposeSent` event where:
+ *   - `to === composer`
+ *   - `composeQueue(from, to, guid, index)` is neither EMPTY_HASH nor RECEIVED_HASH
+ *
+ * Useful for recovery: lists all composes that need TX2.
+ *
+ * @param hubPublicClient  Public client on the hub chain
+ * @param endpoint         LZ EndpointV2 address on the hub
+ * @param composer         MoreVaultsComposer address on the hub
+ * @param fromBlock        Block to start scanning from (default: last 200k blocks)
+ */
+export async function listPendingComposes(
+  hubPublicClient: PublicClient,
+  endpoint: Address,
+  composer: Address,
+  fromBlock?: bigint,
+  chunkSize: bigint = COMPOSE_SCAN_CHUNK_SIZE,
+): Promise<Array<{
+  guid: `0x${string}`
+  blockNumber: bigint
+  from: Address
+  index: number
+  message: `0x${string}`
+  decoded: ReturnType<typeof decodeComposeMessage>
+}>> {
+  const currentBlock = await hubPublicClient.getBlockNumber()
+  const scanFrom = fromBlock ?? (currentBlock > COMPOSE_SCAN_WINDOW_BLOCKS ? currentBlock - COMPOSE_SCAN_WINDOW_BLOCKS : 0n)
+
+  const pending: Array<{
+    guid: `0x${string}`; blockNumber: bigint; from: Address;
+    index: number; message: `0x${string}`
+    decoded: ReturnType<typeof decodeComposeMessage>
+  }> = []
+
+  for (let from = scanFrom; from <= currentBlock; from += chunkSize + 1n) {
+    const chunkEnd = from + chunkSize > currentBlock ? currentBlock : from + chunkSize
+
+    try {
+      const logs = await hubPublicClient.getLogs({
+        address: endpoint,
+        events: [COMPOSE_SENT_EVENT],
+        fromBlock: from,
+        toBlock: chunkEnd,
+      })
+
+      for (const log of logs) {
+        const args = log.args as { from?: Address; to?: Address; guid?: `0x${string}`; index?: number; message?: `0x${string}` }
+        if (!args.to || getAddress(args.to) !== getAddress(composer)) continue
+
+        try {
+          const hash = await hubPublicClient.readContract({
+            address: endpoint,
+            abi: LZ_ENDPOINT_ABI,
+            functionName: 'composeQueue',
+            args: [getAddress(args.from!), getAddress(composer), args.guid!, args.index ?? 0],
+          })
+          if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+            pending.push({
+              guid:        args.guid!,
+              blockNumber: log.blockNumber!,
+              from:        getAddress(args.from!),
+              index:       args.index ?? 0,
+              message:     args.message!,
+              decoded:     decodeComposeMessage(args.message!),
+            })
+          }
+        } catch { /* skip on RPC error */ }
+      }
+    } catch { continue }
+  }
+
+  return pending
 }
 
 /**

@@ -1,16 +1,30 @@
-import { Contract, AbiCoder, zeroPadValue, Signer, Provider } from "ethers";
+import { Contract, AbiCoder, getAddress, zeroPadValue, Signer, Provider } from "ethers";
 import { ERC20_ABI, OFT_ABI, BRIDGE_ABI, LZ_ENDPOINT_ABI } from "./abis";
 import type { ContractTransactionReceipt } from "ethers";
-import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider } from "./chains";
+import { EID_TO_CHAIN_ID, OFT_ROUTES, createChainProvider, getLzEndpoint, DEFAULT_LZ_ENDPOINT } from "./chains";
 import { detectStargateOft } from "./utils";
 import { OMNI_FACTORY_ADDRESS } from "./topology";
 import { ComposerNotConfiguredError, InvalidInputError, ComposeAlreadyExecutedError } from "./errors";
 
-/** LZ Endpoint V2 address — same on all EVM chains */
-const LZ_ENDPOINT = "0x1a44076050125825900e736c501f859c50fe728c";
+/** @deprecated use getLzEndpoint(chainId) — endpoint differs on Flow EVM */
+const LZ_ENDPOINT = DEFAULT_LZ_ENDPOINT;
 
 const EMPTY_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000";
 const RECEIVED_HASH = "0x0000000000000000000000000000000000000000000000000000000000000001";
+
+/** keccak256("ComposeSent(address,address,bytes32,uint16,bytes)") — topic0 for log scans. */
+const COMPOSE_SENT_TOPIC = "0x0c68e6a0b0fb0f33c52455a8da89b21fc640a3dd4a1b21d9bfcc8aeee4a43e84";
+
+// ── Tunable defaults for cross-chain compose flows (mirror of viem) ──────────
+// These preserve the SDK's existing behaviour; exported so callers can read them
+// and the recovery scanners accept a per-call chunk-size override.
+
+/** Default block-range window scanned backwards when no `fromBlock` is given. */
+export const COMPOSE_SCAN_WINDOW_BLOCKS = 200_000n;
+/** Block chunk size per `getLogs` call when scanning `ComposeSent` events. */
+export const COMPOSE_SCAN_CHUNK_SIZE = 2_000n;
+/** Gas limit forwarded to `endpoint.lzCompose` when executing a pending compose. */
+export const EXECUTE_COMPOSE_GAS_LIMIT = 5_000_000n;
 
 /**
  * Ensure `spender` has at least `amount` allowance from `owner`.
@@ -298,8 +312,17 @@ export async function executeCompose(
   message: string,
   fee: bigint,
   index: number = 0,
+  hubChainId?: number,
 ): Promise<{ receipt: ContractTransactionReceipt }> {
-  const endpoint = new Contract(LZ_ENDPOINT, LZ_ENDPOINT_ABI, signer);
+  // Resolve the LZ endpoint for the hub chain. Prefer the explicit hubChainId,
+  // otherwise auto-detect from the signer's network so Flow EVM (which uses a
+  // non-canonical endpoint) works without the caller having to pass it.
+  let resolvedChainId = hubChainId;
+  if (resolvedChainId === undefined && signer.provider) {
+    resolvedChainId = Number((await signer.provider.getNetwork()).chainId);
+  }
+  const endpointAddr = resolvedChainId ? getLzEndpoint(resolvedChainId) : LZ_ENDPOINT;
+  const endpoint = new Contract(endpointAddr, LZ_ENDPOINT_ABI, signer);
 
   // Verify compose is still pending
   const hash: string = await endpoint.composeQueue(from, to, guid, index);
@@ -312,7 +335,7 @@ export async function executeCompose(
 
   const tx = await endpoint.lzCompose(from, to, guid, index, message, "0x", {
     value: fee,
-    gasLimit: 5_000_000n,
+    gasLimit: EXECUTE_COMPOSE_GAS_LIMIT,
   });
   const receipt = await tx.wait();
 
@@ -420,9 +443,6 @@ export async function waitForCompose(
 
   // ComposeSent event ABI for getLogs
   const endpointContract = new Contract(endpoint, LZ_ENDPOINT_ABI, hubProvider)
-
-  // ComposeSent event topic
-  const COMPOSE_SENT_TOPIC = "0x0c68e6a0b0fb0f33c52455a8da89b21fc640a3dd4a1b21d9bfcc8aeee4a43e84"
 
   let attempt = 0
   let scannedUpTo = startBlock - 1n
@@ -532,4 +552,216 @@ export async function waitForCompose(
   throw new Error(
     `Timeout waiting for compose after ${timeoutMs / 60_000} min. Check LayerZero scan for composer ${composeData.to}.`,
   )
+}
+
+// ---------------------------------------------------------------------------
+// Compose recovery helpers (parity with the viem build)
+// ---------------------------------------------------------------------------
+
+/**
+ * Decode the OFTComposeMsgCodec message bytes from a ComposeSent event.
+ *
+ * Layout (bytes):
+ *   0–7   amountSD (uint64)
+ *   8–11  srcEid   (uint32)
+ *  12–43  amountLD (uint256)
+ *  44–75  composeFrom (bytes32, last 20 = depositor address)
+ *  76+    composeMsgPayload = abi.encode(SendParam, uint256 minMsgValue)
+ *
+ * The SendParam inside composeMsgPayload carries dstEid (spoke EID) and
+ * to (bytes32, last 20 = receiver address on spoke).
+ */
+export function decodeComposeMessage(message: string): {
+  srcEid: number
+  amountLD: bigint
+  depositor: string
+  dstEid?: number
+  receiver?: string
+} {
+  const hex = message.startsWith("0x") ? message.slice(2) : message
+  const srcEid = parseInt(hex.slice(16, 24), 16)            // bytes 8–11
+  const amountLD = BigInt("0x" + hex.slice(24, 88))         // bytes 12–43
+  const depositor = getAddress("0x" + hex.slice(112, 152))  // bytes 44–75, last 20
+
+  let dstEid: number | undefined
+  let receiver: string | undefined
+  try {
+    const payload = "0x" + hex.slice(152)                   // bytes 76+
+    const coder = AbiCoder.defaultAbiCoder()
+    const [sendParam] = coder.decode(
+      [
+        "tuple(uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD, bytes extraOptions, bytes composeMsg, bytes oftCmd)",
+        "uint256",
+      ],
+      payload,
+    )
+    dstEid = Number(sendParam.dstEid)
+    receiver = getAddress("0x" + (sendParam.to as string).slice(26)) // last 20 bytes of bytes32
+  } catch { /* leave undefined */ }
+
+  return { srcEid, amountLD, depositor, dstEid, receiver }
+}
+
+/**
+ * Find a specific pending compose on the hub chain by GUID.
+ *
+ * Scans `ComposeSent` events on the LZ Endpoint until it finds an event matching
+ * the given GUID directed at `composer`, then verifies it is still pending.
+ *
+ * @param hubProvider  Provider on the hub chain
+ * @param endpoint     LZ EndpointV2 address on the hub
+ * @param composer     MoreVaultsComposer address on the hub
+ * @param guid         The LZ GUID to locate
+ * @param fromBlock    Block to start scanning from (default: last 200k blocks)
+ * @param hubChainId   Hub chain ID embedded in returned ComposeData (fetched if omitted)
+ * @param chunkSize    Block chunk size per getLogs call (default 2000)
+ * @throws {ComposeAlreadyExecutedError} If the compose was already executed
+ * @throws {Error} If the GUID is not found in the scanned block range
+ */
+export async function findComposeByGuid(
+  hubProvider: Provider,
+  endpoint: string,
+  composer: string,
+  guid: string,
+  fromBlock?: bigint,
+  hubChainId?: number,
+  chunkSize: bigint = COMPOSE_SCAN_CHUNK_SIZE,
+): Promise<ComposeData> {
+  const currentBlock = BigInt(await hubProvider.getBlockNumber())
+  const scanFrom = fromBlock ?? (currentBlock > COMPOSE_SCAN_WINDOW_BLOCKS ? currentBlock - COMPOSE_SCAN_WINDOW_BLOCKS : 0n)
+  const endpointContract = new Contract(endpoint, LZ_ENDPOINT_ABI, hubProvider)
+  const coder = AbiCoder.defaultAbiCoder()
+  const composerLc = composer.toLowerCase()
+
+  let from = scanFrom
+  while (from <= currentBlock) {
+    const chunkEnd = from + chunkSize > currentBlock ? currentBlock : from + chunkSize
+
+    const logs = await hubProvider.getLogs({
+      address: endpoint,
+      topics: [COMPOSE_SENT_TOPIC],
+      fromBlock: `0x${from.toString(16)}`,
+      toBlock: `0x${chunkEnd.toString(16)}`,
+    })
+
+    for (const log of logs) {
+      let decoded
+      try {
+        decoded = coder.decode(["address", "address", "bytes32", "uint16", "bytes"], log.data)
+      } catch { continue }
+      const logFrom = decoded[0] as string
+      const logTo = (decoded[1] as string).toLowerCase()
+      const logGuid = decoded[2] as string
+      const logIndex = Number(decoded[3])
+      const logMessage = decoded[4] as string
+
+      if (logGuid.toLowerCase() === guid.toLowerCase() && logTo === composerLc) {
+        const hash: string = await endpointContract.composeQueue(logFrom, composer, guid, logIndex)
+        if (hash === RECEIVED_HASH) throw new ComposeAlreadyExecutedError()
+        if (hash === EMPTY_HASH) {
+          throw new Error(`Compose ${guid} found in events but composeQueue hash is empty — may have been cleared externally.`)
+        }
+        const chainId = hubChainId ?? Number((await hubProvider.getNetwork()).chainId)
+        return {
+          endpoint,
+          from: logFrom,
+          to: composer,
+          guid,
+          index: logIndex,
+          message: logMessage,
+          isStargate: false,
+          hubChainId: chainId,
+          hubBlockStart: scanFrom,
+        }
+      }
+    }
+
+    from = chunkEnd + 1n
+  }
+
+  throw new Error(
+    `Compose GUID ${guid} not found in ComposeSent events on blocks ${scanFrom}→${currentBlock}. ` +
+    `Pass a lower fromBlock to scan further back.`,
+  )
+}
+
+/**
+ * Scan the hub LZ Endpoint for all pending (unexecuted) composes for a composer.
+ *
+ * Returns every `ComposeSent` event where `to === composer` and the compose is
+ * still pending in `composeQueue`. Useful for recovery: lists composes needing TX2.
+ *
+ * @param hubProvider  Provider on the hub chain
+ * @param endpoint     LZ EndpointV2 address on the hub
+ * @param composer     MoreVaultsComposer address on the hub
+ * @param fromBlock    Block to start scanning from (default: last 200k blocks)
+ * @param chunkSize    Block chunk size per getLogs call (default 2000)
+ */
+export async function listPendingComposes(
+  hubProvider: Provider,
+  endpoint: string,
+  composer: string,
+  fromBlock?: bigint,
+  chunkSize: bigint = COMPOSE_SCAN_CHUNK_SIZE,
+): Promise<Array<{
+  guid: string
+  blockNumber: bigint
+  from: string
+  index: number
+  message: string
+  decoded: ReturnType<typeof decodeComposeMessage>
+}>> {
+  const currentBlock = BigInt(await hubProvider.getBlockNumber())
+  const scanFrom = fromBlock ?? (currentBlock > COMPOSE_SCAN_WINDOW_BLOCKS ? currentBlock - COMPOSE_SCAN_WINDOW_BLOCKS : 0n)
+  const endpointContract = new Contract(endpoint, LZ_ENDPOINT_ABI, hubProvider)
+  const coder = AbiCoder.defaultAbiCoder()
+  const composerLc = composer.toLowerCase()
+
+  const pending: Array<{
+    guid: string; blockNumber: bigint; from: string;
+    index: number; message: string
+    decoded: ReturnType<typeof decodeComposeMessage>
+  }> = []
+
+  for (let from = scanFrom; from <= currentBlock; from += chunkSize + 1n) {
+    const chunkEnd = from + chunkSize > currentBlock ? currentBlock : from + chunkSize
+
+    try {
+      const logs = await hubProvider.getLogs({
+        address: endpoint,
+        topics: [COMPOSE_SENT_TOPIC],
+        fromBlock: `0x${from.toString(16)}`,
+        toBlock: `0x${chunkEnd.toString(16)}`,
+      })
+
+      for (const log of logs) {
+        let decoded
+        try {
+          decoded = coder.decode(["address", "address", "bytes32", "uint16", "bytes"], log.data)
+        } catch { continue }
+        const logFrom = decoded[0] as string
+        const logTo = (decoded[1] as string).toLowerCase()
+        const logGuid = decoded[2] as string
+        const logIndex = Number(decoded[3])
+        const logMessage = decoded[4] as string
+        if (logTo !== composerLc) continue
+
+        try {
+          const hash: string = await endpointContract.composeQueue(logFrom, composer, logGuid, logIndex)
+          if (hash !== EMPTY_HASH && hash !== RECEIVED_HASH) {
+            pending.push({
+              guid: logGuid,
+              blockNumber: BigInt(log.blockNumber),
+              from: logFrom,
+              index: logIndex,
+              message: logMessage,
+              decoded: decodeComposeMessage(logMessage),
+            })
+          }
+        } catch { /* skip on RPC error */ }
+      }
+    } catch { continue }
+  }
+
+  return pending
 }

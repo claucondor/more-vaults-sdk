@@ -208,6 +208,21 @@ export const UNISWAP_V3_ROUTERS: Record<number, string> = {
   [747]:   '0xeEDC6Ff75e1b10B903D9013c358e446a73d35341',  // Flow EVM — FlowSwap V3 SwapRouter
 };
 
+/**
+ * LayerZero V2 EndpointV2 address per chain.
+ * Flow EVM uses a chain-specific address; all other supported chains use the canonical address.
+ * Verified: Flow EVM endpoint 0xcb566e3b... confirmed from ComposeSent event emitter on-chain.
+ */
+export const DEFAULT_LZ_ENDPOINT = "0x1a44076050125825900e736c501f859c50fe728c";
+export const LZ_ENDPOINT_BY_CHAIN: Partial<Record<number, string>> = {
+  [CHAIN_IDS.flowEVMMainnet]: "0xcb566e3b6934fa77258d68ea18e931fa75e1aaaa",
+};
+
+/** Returns the LZ EndpointV2 address for a given EVM chain ID. */
+export function getLzEndpoint(chainId: number): string {
+  return LZ_ENDPOINT_BY_CHAIN[chainId] ?? DEFAULT_LZ_ENDPOINT;
+}
+
 /** Public RPC endpoints per chain for cross-chain reads */
 const PUBLIC_RPCS: Record<number, string[]> = {
   1:     ['https://ethereum-rpc.publicnode.com', 'https://eth.drpc.org', 'https://eth.llamarpc.com'],
