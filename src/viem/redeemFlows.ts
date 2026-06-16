@@ -9,6 +9,7 @@ import {
   zeroAddress,
 } from 'viem'
 import { VAULT_ABI, VAULT_REQUEST_REDEEM_LEGACY_ABI, BRIDGE_ABI, OFT_ABI, CONFIG_ABI, ERC20_ABI, METADATA_ABI } from './abis'
+import { applyGasBuffer } from '../common/gasBuffer.js'
 import type {
   VaultAddresses,
   RedeemResult,
@@ -369,7 +370,7 @@ export async function redeemAsync(
     parseContractError(err, vault, account.address)
   }
 
-  const gas = gasEstimate! * 130n / 100n
+  const gas = applyGasBuffer(gasEstimate!)
 
   const txHash = await walletClient.writeContract({
     address: vault,
@@ -431,7 +432,7 @@ export async function estimateRedeemCost(
         value: lzFee,
         account: owner,
       })
-      requestGas = raw * 130n / 100n
+      requestGas = applyGasBuffer(raw)
     } catch { /* return 0 if simulation fails (e.g. insufficient balance) */ }
 
     const approveGas = 60_000n

@@ -281,3 +281,12 @@ export { UNISWAP_V3_ROUTERS, OFT_ROUTES } from "./chains";
 
 // --- wagmi / ethers adapter compatibility ---
 export { asSdkSigner } from "./wagmiCompat";
+
+// --- Gas buffer configuration ---
+// Padding applied on top of on-chain gas estimates to avoid out-of-gas reverts.
+export {
+  DEFAULT_GAS_BUFFER_BPS,
+  applyGasBuffer,
+  getDefaultGasBufferBps,
+  setDefaultGasBufferBps,
+} from "../common/gasBuffer.js";

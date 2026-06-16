@@ -258,3 +258,12 @@ export { asSdkClient } from './wagmiCompat'
 // --- Flow persistence ---
 export type { FlowStorage, DepositFlowState } from './flowStorage'
 export { LocalStorageAdapter, getDefaultStorage, saveDepositFlow, loadDepositFlow, clearDepositFlow } from './flowStorage'
+
+// --- Gas buffer configuration ---
+// Padding applied on top of on-chain gas estimates to avoid out-of-gas reverts.
+export {
+  DEFAULT_GAS_BUFFER_BPS,
+  applyGasBuffer,
+  getDefaultGasBufferBps,
+  setDefaultGasBufferBps,
+} from '../common/gasBuffer.js'

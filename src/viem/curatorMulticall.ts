@@ -32,6 +32,7 @@ import type {
 } from './types.js'
 import { InvalidInputError } from './errors.js'
 import { parseContractError } from './errorParser.js'
+import { applyGasBuffer } from '../common/gasBuffer.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Encoding helpers
@@ -328,6 +329,19 @@ export async function submitActions(
     parseContractError(err, v, account.address)
   }
 
+  // Estimate gas and apply a 30% buffer — deep call stacks, some vaults can exceed the default estimate, causing out-of-gas on-chain.
+  let gasLimit: bigint | undefined
+  try {
+    const estimated = await publicClient.estimateContractGas({
+      address: v,
+      abi: MULTICALL_ABI,
+      functionName: 'submitActions',
+      args: [actions],
+      account: account.address,
+    })
+    gasLimit = applyGasBuffer(estimated)
+  } catch { /* fall back to auto-estimate */ }
+
   const txHash = await walletClient.writeContract({
     address: v,
     abi: MULTICALL_ABI,
@@ -335,6 +349,7 @@ export async function submitActions(
     args: [actions],
     account,
     chain: walletClient.chain,
+    gas: gasLimit,
   })
 
   // Read the nonce that was assigned: the contract increments actionNonce after storing,
@@ -389,6 +404,18 @@ export async function executeActions(
     parseContractError(err, v, account.address)
   }
 
+  let gasLimit: bigint | undefined
+  try {
+    const estimated = await publicClient.estimateContractGas({
+      address: v,
+      abi: MULTICALL_ABI,
+      functionName: 'executeActions',
+      args: [nonce],
+      account: account.address,
+    })
+    gasLimit = applyGasBuffer(estimated)
+  } catch { /* fall back to auto-estimate */ }
+
   const txHash = await walletClient.writeContract({
     address: v,
     abi: MULTICALL_ABI,
@@ -396,6 +423,7 @@ export async function executeActions(
     args: [nonce],
     account,
     chain: walletClient.chain,
+    gas: gasLimit,
   })
 
   return { txHash }
