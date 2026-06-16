@@ -115,6 +115,12 @@ export {
   quoteComposeFee,
   executeCompose,
   waitForCompose,
+  findComposeByGuid,
+  listPendingComposes,
+  decodeComposeMessage,
+  COMPOSE_SCAN_WINDOW_BLOCKS,
+  COMPOSE_SCAN_CHUNK_SIZE,
+  EXECUTE_COMPOSE_GAS_LIMIT,
 } from "./crossChainFlows";
 
 // --- Redeem flows ---

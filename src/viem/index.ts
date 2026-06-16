@@ -114,6 +114,10 @@ export {
   decodeComposeMessage,
   quoteComposeFee,
   executeCompose,
+  COMPOSE_GAS_LIMIT,
+  READ_FEE_FALLBACK_MULTIPLIER,
+  COMPOSE_SCAN_WINDOW_BLOCKS,
+  COMPOSE_SCAN_CHUNK_SIZE,
 } from './crossChainFlows'
 
 // --- Redeem Flows ---

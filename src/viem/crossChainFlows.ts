@@ -24,6 +24,19 @@ function isNativeDropCapError(e: unknown): boolean {
   return String(e).includes('0x0084ce02')
 }
 
+// ── Tunable defaults for cross-chain compose flows ───────────────────────────
+// These preserve the SDK's existing behaviour. They are exported so callers can
+// reference them, and the flows below accept per-call overrides where relevant.
+
+/** Gas limit injected into the LZ compose option for standard (non-Stargate) OFT deposits. */
+export const COMPOSE_GAS_LIMIT = 2_000_000n
+/** When the hub read fee can't be quoted, assume it is at most this multiple of the share-send fee. */
+export const READ_FEE_FALLBACK_MULTIPLIER = 3n
+/** Default block-range window scanned backwards when no `fromBlock` is given. */
+export const COMPOSE_SCAN_WINDOW_BLOCKS = 200_000n
+/** Block chunk size per `getLogs` call when scanning `ComposeSent` events. */
+export const COMPOSE_SCAN_CHUNK_SIZE = 2_000n
+
 
 const FACTORY_COMPOSER_ABI = [
   {
@@ -128,7 +141,7 @@ async function resolveComposeNativeValue(
       const shareSendFee = feeQuote.nativeFee
       // If readFee couldn't be quoted, assume it could be up to 3x the share send fee
       // (covers D7 LZ Read cost which tends to be 2-3x the OFT send fee on Flow EVM)
-      const conservativeReadFee = readFeeOk ? readFee : shareSendFee * 3n
+      const conservativeReadFee = readFeeOk ? readFee : shareSendFee * READ_FEE_FALLBACK_MULTIPLIER
       const total = conservativeReadFee + shareSendFee
       if (total > 0n) return total
       // Both fees returned 0 — fall through to the floor fallback below
@@ -228,7 +241,7 @@ export async function depositFromSpoke(
   minSharesOut: bigint = 0n,
   minAmountLD?: bigint,
   extraOptions: `0x${string}` = '0x',
-  options?: { storage?: FlowStorage | null },
+  options?: { storage?: FlowStorage | null; composeGasLimit?: bigint },
 ): Promise<SpokeDepositResult> {
   const account = walletClient.account!
   const oft = getAddress(spokeOFT)
@@ -290,7 +303,7 @@ export async function depositFromSpoke(
       hubClient, vault, composerAddress, spokeEid, pad(getAddress(receiver), { size: 32 }),
     )
     resolvedExtraOptions = composeNativeValue > 0n
-      ? buildLzComposeOption(2_000_000n, composeNativeValue)
+      ? buildLzComposeOption(options?.composeGasLimit ?? COMPOSE_GAS_LIMIT, composeNativeValue)
       : '0x' as `0x${string}`
   } else {
     resolvedExtraOptions = '0x' as `0x${string}`
@@ -504,6 +517,7 @@ export async function quoteDepositFromSpokeFee(
   minSharesOut: bigint = 0n,
   minAmountLD?: bigint,
   extraOptions: `0x${string}` = '0x',
+  options?: { composeGasLimit?: bigint },
 ): Promise<bigint> {
   const oft = getAddress(spokeOFT)
   const resolvedOftCmd = resolveOftCmd(oft)
@@ -530,7 +544,7 @@ export async function quoteDepositFromSpokeFee(
       hubClient, vault, composerAddress, spokeEid, receiverBytes32 as `0x${string}`,
     )
     resolvedExtraOptions = composeNativeValue > 0n
-      ? buildLzComposeOption(2_000_000n, composeNativeValue)
+      ? buildLzComposeOption(options?.composeGasLimit ?? COMPOSE_GAS_LIMIT, composeNativeValue)
       : '0x' as `0x${string}`
   } else {
     resolvedExtraOptions = '0x' as `0x${string}`
@@ -882,10 +896,10 @@ export async function findComposeByGuid(
   guid: `0x${string}`,
   fromBlock?: bigint,
   hubChainId?: number,
+  chunkSize: bigint = COMPOSE_SCAN_CHUNK_SIZE,
 ): Promise<ComposeData> {
   const currentBlock = await hubPublicClient.getBlockNumber()
-  const scanFrom = fromBlock ?? (currentBlock > 200_000n ? currentBlock - 200_000n : 0n)
-  const chunkSize = 2_000n
+  const scanFrom = fromBlock ?? (currentBlock > COMPOSE_SCAN_WINDOW_BLOCKS ? currentBlock - COMPOSE_SCAN_WINDOW_BLOCKS : 0n)
 
   let from = scanFrom
   while (from <= currentBlock) {
@@ -957,6 +971,7 @@ export async function listPendingComposes(
   endpoint: Address,
   composer: Address,
   fromBlock?: bigint,
+  chunkSize: bigint = COMPOSE_SCAN_CHUNK_SIZE,
 ): Promise<Array<{
   guid: `0x${string}`
   blockNumber: bigint
@@ -966,8 +981,7 @@ export async function listPendingComposes(
   decoded: ReturnType<typeof decodeComposeMessage>
 }>> {
   const currentBlock = await hubPublicClient.getBlockNumber()
-  const scanFrom = fromBlock ?? (currentBlock > 200_000n ? currentBlock - 200_000n : 0n)
-  const chunkSize = 2_000n
+  const scanFrom = fromBlock ?? (currentBlock > COMPOSE_SCAN_WINDOW_BLOCKS ? currentBlock - COMPOSE_SCAN_WINDOW_BLOCKS : 0n)
 
   const pending: Array<{
     guid: `0x${string}`; blockNumber: bigint; from: Address;
